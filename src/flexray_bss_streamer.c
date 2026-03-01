@@ -89,6 +89,7 @@ static volatile uint32_t fr4_seen_ids[64];
 
 static inline void record_frame_id(volatile uint32_t *bitmap, uint16_t frame_id)
 {
+    if (frame_id >= 2048) return;
     bitmap[frame_id >> 5] |= (1u << (frame_id & 0x1F));
 }
 
