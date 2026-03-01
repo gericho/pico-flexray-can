@@ -11,13 +11,19 @@
 #include "flexray_injector_rules.h"
 
 static PIO pio_forwarder_with_injector;
-static uint sm_forwarder_with_injector_to_vehicle;
-static uint sm_forwarder_with_injector_to_ecu;
+static uint sm_forwarder_with_injector_to_fr1;
+static uint sm_forwarder_with_injector_to_fr2;
+static uint sm_forwarder_with_injector_to_fr3;
+static uint sm_forwarder_with_injector_to_fr4;
 
-static int dma_inject_chan_to_vehicle = -1;
-static int dma_inject_chan_to_ecu = -1;
-static dma_channel_config injector_to_vehicle_dc;
-static dma_channel_config injector_to_ecu_dc;
+extern volatile int dma_inject_chan_to_fr1;
+extern volatile int dma_inject_chan_to_fr2;
+extern volatile int dma_inject_chan_to_fr3;
+extern volatile int dma_inject_chan_to_fr4;
+static dma_channel_config injector_to_fr1_dc;
+static dma_channel_config injector_to_fr2_dc;
+static dma_channel_config injector_to_fr3_dc;
+static dma_channel_config injector_to_fr4_dc;
 
 // rules now come from flexray_injector_rules.h
 
@@ -128,19 +134,33 @@ static void fix_e2e_payload(uint8_t *e2e_start_offset, uint8_t init_value, uint8
 
 static void inject_frame(uint8_t *full_frame, uint16_t injector_payload_length, uint8_t direction)
 {
-    // first word is length indicator, rest is payload
-    // pio y-- need pre-sub 1 from length
-    if (direction == INJECT_DIRECTION_TO_VEHICLE) {
-    pio_sm_put(pio_forwarder_with_injector, sm_forwarder_with_injector_to_vehicle, injector_payload_length - 1);
-    dma_channel_set_read_addr((uint)dma_inject_chan_to_vehicle, (const void *)full_frame, false);
-    dma_channel_set_trans_count((uint)dma_inject_chan_to_vehicle, injector_payload_length / 4, true);
-    } else if (direction == INJECT_DIRECTION_TO_ECU) {
-    pio_sm_put(pio_forwarder_with_injector, sm_forwarder_with_injector_to_ecu, injector_payload_length - 1);
-    dma_channel_set_read_addr((uint)dma_inject_chan_to_ecu, (const void *)full_frame, false);
-    dma_channel_set_trans_count((uint)dma_inject_chan_to_ecu, injector_payload_length / 4, true);
-    } else {
+    uint sm;
+    int dma_chan;
+
+    switch (direction) {
+    case INJECT_DIRECTION_TO_FR1:
+        sm = sm_forwarder_with_injector_to_fr1;
+        dma_chan = dma_inject_chan_to_fr1;
+        break;
+    case INJECT_DIRECTION_TO_FR2:
+        sm = sm_forwarder_with_injector_to_fr2;
+        dma_chan = dma_inject_chan_to_fr2;
+        break;
+    case INJECT_DIRECTION_TO_FR3:
+        sm = sm_forwarder_with_injector_to_fr3;
+        dma_chan = dma_inject_chan_to_fr3;
+        break;
+    case INJECT_DIRECTION_TO_FR4:
+        sm = sm_forwarder_with_injector_to_fr4;
+        dma_chan = dma_inject_chan_to_fr4;
+        break;
+    default:
         return;
     }
+
+    pio_sm_put(pio_forwarder_with_injector, sm, injector_payload_length - 1);
+    dma_channel_set_read_addr((uint)dma_chan, (const void *)full_frame, false);
+    dma_channel_set_trans_count((uint)dma_chan, injector_payload_length / 4, true);
 }
 
 // flexray_frame_t dummy_frame;
@@ -184,28 +204,24 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
     }
 }
 
-static void setup_dma(void){
-    dma_inject_chan_to_vehicle = (int)dma_claim_unused_channel(true);
-    dma_inject_chan_to_ecu = (int)dma_claim_unused_channel(true);
-    
-    injector_to_vehicle_dc = dma_channel_get_default_config((uint)dma_inject_chan_to_vehicle);
-    channel_config_set_transfer_data_size(&injector_to_vehicle_dc, DMA_SIZE_32);
-    channel_config_set_bswap(&injector_to_vehicle_dc, true);
-    channel_config_set_read_increment(&injector_to_vehicle_dc, true);
-    channel_config_set_write_increment(&injector_to_vehicle_dc, false);
-    channel_config_set_dreq(&injector_to_vehicle_dc, pio_get_dreq(pio_forwarder_with_injector, sm_forwarder_with_injector_to_vehicle, true)); // TX pacing
-    dma_channel_set_config((uint)dma_inject_chan_to_vehicle, &injector_to_vehicle_dc, false);        
-    dma_channel_set_write_addr((uint)dma_inject_chan_to_vehicle, (void *)&pio2->txf[sm_forwarder_with_injector_to_vehicle], false);
-    
-    injector_to_ecu_dc = dma_channel_get_default_config((uint)dma_inject_chan_to_ecu);
-    channel_config_set_transfer_data_size(&injector_to_ecu_dc, DMA_SIZE_32);
-    channel_config_set_bswap(&injector_to_ecu_dc, true);
-    channel_config_set_read_increment(&injector_to_ecu_dc, true);
-    channel_config_set_write_increment(&injector_to_ecu_dc, false);
-    channel_config_set_dreq(&injector_to_ecu_dc, pio_get_dreq(pio_forwarder_with_injector, sm_forwarder_with_injector_to_ecu, true)); // TX pacing
-    dma_channel_set_config((uint)dma_inject_chan_to_ecu, &injector_to_ecu_dc, false);        
-    dma_channel_set_write_addr((uint)dma_inject_chan_to_ecu, (void *)&pio2->txf[sm_forwarder_with_injector_to_ecu], false);
+static void setup_inject_dma_channel(volatile int *chan, dma_channel_config *dc, uint sm)
+{
+    *chan = (int)dma_claim_unused_channel(true);
+    *dc = dma_channel_get_default_config((uint)*chan);
+    channel_config_set_transfer_data_size(dc, DMA_SIZE_32);
+    channel_config_set_bswap(dc, true);
+    channel_config_set_read_increment(dc, true);
+    channel_config_set_write_increment(dc, false);
+    channel_config_set_dreq(dc, pio_get_dreq(pio_forwarder_with_injector, sm, true));
+    dma_channel_set_config((uint)*chan, dc, false);
+    dma_channel_set_write_addr((uint)*chan, (void *)&pio_forwarder_with_injector->txf[sm], false);
+}
 
+static void setup_dma(void){
+    setup_inject_dma_channel(&dma_inject_chan_to_fr1, &injector_to_fr1_dc, sm_forwarder_with_injector_to_fr1);
+    setup_inject_dma_channel(&dma_inject_chan_to_fr2, &injector_to_fr2_dc, sm_forwarder_with_injector_to_fr2);
+    setup_inject_dma_channel(&dma_inject_chan_to_fr3, &injector_to_fr3_dc, sm_forwarder_with_injector_to_fr3);
+    setup_inject_dma_channel(&dma_inject_chan_to_fr4, &injector_to_fr4_dc, sm_forwarder_with_injector_to_fr4);
 }
 
 bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uint8_t *bytes)
@@ -256,15 +272,21 @@ bool injector_is_enabled(void)
 }
 
 void setup_forwarder_with_injector(PIO pio,
-    uint rx_pin_from_ecu, uint tx_pin_to_vehicle,
-    uint rx_pin_from_vehicle, uint tx_pin_to_ecu)
+    uint rx_pin_from_fr1, uint tx_pin_to_fr2,
+    uint rx_pin_from_fr2, uint tx_pin_to_fr1,
+    uint rx_pin_from_fr3, uint tx_pin_to_fr4,
+    uint rx_pin_from_fr4, uint tx_pin_to_fr3)
 {
     pio_forwarder_with_injector = pio;
     uint offset = pio_add_program(pio, &flexray_forwarder_with_injector_program);
-    sm_forwarder_with_injector_to_vehicle = pio_claim_unused_sm(pio, true);
-    sm_forwarder_with_injector_to_ecu = pio_claim_unused_sm(pio, true);
+    sm_forwarder_with_injector_to_fr1 = pio_claim_unused_sm(pio, true);
+    sm_forwarder_with_injector_to_fr2 = pio_claim_unused_sm(pio, true);
+    sm_forwarder_with_injector_to_fr3 = pio_claim_unused_sm(pio, true);
+    sm_forwarder_with_injector_to_fr4 = pio_claim_unused_sm(pio, true);
 
-    flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_vehicle, offset, rx_pin_from_ecu, tx_pin_to_vehicle);
-    flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_ecu, offset, rx_pin_from_vehicle, tx_pin_to_ecu);
+    flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_fr2, offset, rx_pin_from_fr1, tx_pin_to_fr2);
+    flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_fr1, offset, rx_pin_from_fr2, tx_pin_to_fr1);
+    flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_fr4, offset, rx_pin_from_fr3, tx_pin_to_fr4);
+    flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_fr3, offset, rx_pin_from_fr4, tx_pin_to_fr3);
     setup_dma();
 }

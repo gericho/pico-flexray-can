@@ -193,8 +193,17 @@ void print_frame(flexray_frame_t *frame)
     {
         printf("%02X", frame->payload[i]);
     }
-    printf(",%02lX,%s\n", frame->frame_crc, frame->source == FROM_ECU ? "ECU" : frame->source == FROM_VEHICLE ? "VEHICLE"
-                                                                                                               : "UNKNOWN");
+    printf(",%02lX,", frame->frame_crc);
+    uint8_t src = frame->source;
+    if (src == FROM_UNKNOWN) { printf("UNKNOWN"); }
+    else {
+        bool first = true;
+        if (src & FROM_FR1) { printf("FR1"); first = false; }
+        if (src & FROM_FR2) { printf(first ? "FR2" : "|FR2"); first = false; }
+        if (src & FROM_FR3) { printf(first ? "FR3" : "|FR3"); first = false; }
+        if (src & FROM_FR4) { printf(first ? "FR4" : "|FR4"); }
+    }
+    printf("\n");
 }
 
 bool is_valid_frame(flexray_frame_t *frame, const uint8_t *raw_buffer)

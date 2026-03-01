@@ -3,8 +3,10 @@
 
 #include <stdint.h>
 
-#define INJECT_DIRECTION_TO_VEHICLE 1
-#define INJECT_DIRECTION_TO_ECU 0
+#define INJECT_DIRECTION_TO_FR1 0
+#define INJECT_DIRECTION_TO_FR2 1
+#define INJECT_DIRECTION_TO_FR3 2
+#define INJECT_DIRECTION_TO_FR4 3
 typedef struct {
 	uint16_t trigger_id;    // when this id arrives...
 	uint16_t target_id;  // ...inject using cached template of this id (if available)
@@ -30,7 +32,7 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_init_value = 0xd6,
 		.replace_offset = 2,
 		.replace_len = 14,
-		.direction = INJECT_DIRECTION_TO_ECU,
+		.direction = INJECT_DIRECTION_TO_FR1,
 	},
 };
 

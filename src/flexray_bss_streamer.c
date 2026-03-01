@@ -16,39 +16,53 @@
 #include "flexray_forwarder_with_injector.h"
 #include "flexray_frame.h"
 
-// --- Global State ---
-uint dma_data_from_ecu_chan;
-uint dma_data_from_vehicle_chan;
-uint dma_rearm_ecu_chan;
-uint dma_rearm_vehicle_chan;
+// ===================== FR1/FR2 (primary) stream state =====================
+uint dma_data_from_fr1_chan;
+uint dma_data_from_fr2_chan;
+static uint dma_rearm_fr1_chan;
+static uint dma_rearm_fr2_chan;
 
-// --- Global Config for Reset ---
 static PIO streamer_pio;
-static uint streamer_sm_from_ecu;
-static uint streamer_sm_from_vehicle;
+static uint streamer_sm_fr1;
+static uint streamer_sm_fr2;
 
-// Ring-ready buffers per source, power-of-two sized and aligned (for circular DMA)
-// Sizes are defined in header
+volatile uint8_t fr1_ring_buffer[FR1_RING_SIZE_BYTES] __attribute__((aligned(FR1_RING_SIZE_BYTES)));
+volatile uint8_t fr2_ring_buffer[FR2_RING_SIZE_BYTES] __attribute__((aligned(FR2_RING_SIZE_BYTES)));
 
-// DMA block size per data-channel before chaining to rearm
+static volatile uint32_t fr1_prev_write_idx = 0;
+static volatile uint32_t fr2_prev_write_idx = 0;
+
+// ===================== FR3/FR4 (secondary) stream state =====================
+static uint dma_data_from_fr3_chan;
+static uint dma_data_from_fr4_chan;
+static uint dma_rearm_fr3_chan;
+static uint dma_rearm_fr4_chan;
+
+static PIO streamer_pio_fr34;
+static uint streamer_sm_fr3;
+static uint streamer_sm_fr4;
+
+volatile uint8_t fr3_ring_buffer[FR3_RING_SIZE_BYTES] __attribute__((aligned(FR3_RING_SIZE_BYTES)));
+volatile uint8_t fr4_ring_buffer[FR4_RING_SIZE_BYTES] __attribute__((aligned(FR4_RING_SIZE_BYTES)));
+
+static volatile uint32_t fr3_prev_write_idx = 0;
+static volatile uint32_t fr4_prev_write_idx = 0;
+
+// ===================== Shared state =====================
 #define DMA_BLOCK_COUNT_BYTES  (4096u | 0x10000000) // self trigger
 
-volatile uint8_t ecu_ring_buffer[ECU_RING_SIZE_BYTES] __attribute__((aligned(ECU_RING_SIZE_BYTES)));
-volatile uint8_t vehicle_ring_buffer[VEH_RING_SIZE_BYTES] __attribute__((aligned(VEH_RING_SIZE_BYTES)));
 volatile uint32_t irq_counter = 0;
 volatile uint32_t irq_handler_call_count = 0;
-// Keep existing buffer address indirection for current ping-pong logic
+
 volatile void *buffer_addresses[2] = {
-    (void *)ecu_ring_buffer,
-    (void *)vehicle_ring_buffer};
+    (void *)fr1_ring_buffer,
+    (void *)fr2_ring_buffer};
 
-// DMA to write injector payload to PIO2 SM3 TX FIFO
-volatile int dma_inject_chan_to_ecu = -1;
-volatile int dma_inject_chan_to_vehicle = -1;
+volatile int dma_inject_chan_to_fr1 = -1;
+volatile int dma_inject_chan_to_fr2 = -1;
+volatile int dma_inject_chan_to_fr3 = -1;
+volatile int dma_inject_chan_to_fr4 = -1;
 
-// injection/cache logic moved into flexray_injector.{h,c}
-
-// Current buffer index no longer used with ring; keep for compatibility if needed
 volatile uint32_t current_buffer_index = 0;
 
 static inline uint32_t dma_ring_write_idx(uint dma_chan, volatile uint8_t *ring_base, uint32_t ring_mask)
@@ -57,19 +71,36 @@ static inline uint32_t dma_ring_write_idx(uint dma_chan, volatile uint8_t *ring_
     return (wa - (uint32_t)(uintptr_t)ring_base) & ring_mask;
 }
 
-// Track last-seen write indices to identify which DMA advanced at this IRQ
-static volatile uint32_t ecu_prev_write_idx = 0;
-static volatile uint32_t veh_prev_write_idx = 0;
-
-// --- Cross-core notification ring (single-producer ISR on core1, single-consumer on core0) ---
+// ===================== Cross-core notification ring =====================
 #define NOTIFY_RING_SIZE 1024u
 static volatile uint32_t notify_ring[NOTIFY_RING_SIZE];
-static volatile uint16_t notify_head = 0; // producer writes head
-static volatile uint16_t notify_tail = 0; // consumer advances tail
+static volatile uint16_t notify_head = 0;
+static volatile uint16_t notify_tail = 0;
 static volatile uint32_t notify_dropped = 0;
 
 static volatile uint16_t current_frame_id = 0;
 static volatile uint8_t current_cycle_count = 0;
+
+// Bitmaps to record which frame IDs have been seen on FR3 vs FR4.
+// Used to demux FR1/FR2 streams: if a frame_id was seen on FR3, it belongs
+// to the FR3 channel; if on FR4, the FR4 channel.
+static volatile uint32_t fr3_seen_ids[64]; // 2048 bits (11-bit frame ID space)
+static volatile uint32_t fr4_seen_ids[64];
+
+static inline void record_frame_id(volatile uint32_t *bitmap, uint16_t frame_id)
+{
+    bitmap[frame_id >> 5] |= (1u << (frame_id & 0x1F));
+}
+
+uint8_t lookup_frame_source(uint16_t frame_id)
+{
+    if (frame_id >= 2048) return FROM_UNKNOWN;
+    uint32_t word = frame_id >> 5;
+    uint32_t bit = 1u << (frame_id & 0x1F);
+    if (fr3_seen_ids[word] & bit) return FROM_FR3;
+    if (fr4_seen_ids[word] & bit) return FROM_FR4;
+    return FROM_UNKNOWN;
+}
 
 void notify_queue_init(void)
 {
@@ -85,11 +116,11 @@ static inline bool notify_queue_push(uint32_t value)
     if (next == notify_tail)
     {
         notify_dropped++;
-        return false; // full
+        return false;
     }
     notify_ring[head] = value;
     notify_head = next;
-    __sev(); // wake consumer after publishing head
+    __sev();
     return true;
 }
 
@@ -98,7 +129,7 @@ bool notify_queue_pop(uint32_t *encoded)
     uint16_t tail = notify_tail;
     if (tail == notify_head)
     {
-        return false; // empty
+        return false;
     }
     *encoded = notify_ring[tail];
     notify_tail = (uint16_t)((tail + 1u) & (NOTIFY_RING_SIZE - 1u));
@@ -110,143 +141,161 @@ uint32_t notify_queue_dropped(void)
     return notify_dropped;
 }
 
-// This is the DMA interrupt handler, which is much more efficient.
+// ===================== FR1/FR2 IRQ handler =====================
 void __time_critical_func(streamer_irq0_handler)(void)
 {
-    // GPIO7 high indicates ISR processing; use direct SIO for minimal overhead
     sio_hw->gpio_set = (1u << 7);
     uint32_t start_idx = 0;
 
     irq_handler_call_count++;
-    // Clear PIO IRQ source
     pio_interrupt_clear(streamer_pio, 3);
 
-    // Determine source by which DMA write index advanced since last IRQ
-    uint32_t ecu_idx_now = dma_ring_write_idx(dma_data_from_ecu_chan, ecu_ring_buffer, ECU_RING_MASK);
-    uint32_t veh_idx_now = dma_ring_write_idx(dma_data_from_vehicle_chan, vehicle_ring_buffer, VEH_RING_MASK);
+    uint32_t fr1_idx_now = dma_ring_write_idx(dma_data_from_fr1_chan, fr1_ring_buffer, FR1_RING_MASK);
+    uint32_t fr2_idx_now = dma_ring_write_idx(dma_data_from_fr2_chan, fr2_ring_buffer, FR2_RING_MASK);
 
-    bool ecu_advanced = (ecu_idx_now != ecu_prev_write_idx);
-    bool veh_advanced = (veh_idx_now != veh_prev_write_idx);
+    bool fr1_advanced = (fr1_idx_now != fr1_prev_write_idx);
+    bool fr2_advanced = (fr2_idx_now != fr2_prev_write_idx);
 
     uint32_t idx = 0;
-    bool is_vehicle = false;
+    bool is_fr2 = false;
 
-    if (ecu_advanced && !veh_advanced)
+    if (fr1_advanced && !fr2_advanced)
     {
-        start_idx = ecu_prev_write_idx; // frame start for ECU stream
-        idx = ecu_idx_now;
-        ecu_prev_write_idx = ecu_idx_now;
+        start_idx = fr1_prev_write_idx;
+        idx = fr1_idx_now;
+        fr1_prev_write_idx = fr1_idx_now;
     }
-    else if (!ecu_advanced && veh_advanced)
+    else if (!fr1_advanced && fr2_advanced)
     {
-        start_idx = veh_prev_write_idx; // frame start for VEH stream
-        idx = veh_idx_now;
-        is_vehicle = true;
-        veh_prev_write_idx = veh_idx_now;
+        start_idx = fr2_prev_write_idx;
+        idx = fr2_idx_now;
+        is_fr2 = true;
+        fr2_prev_write_idx = fr2_idx_now;
     }
     else
     {
-        // Fallback: pick the one with larger delta (handles rare simultaneous cases)
-        uint32_t ecu_delta = (ecu_idx_now - ecu_prev_write_idx) & ECU_RING_MASK;
-        uint32_t veh_delta = (veh_idx_now - veh_prev_write_idx) & VEH_RING_MASK;
-        if (veh_delta > ecu_delta)
+        uint32_t fr1_delta = (fr1_idx_now - fr1_prev_write_idx) & FR1_RING_MASK;
+        uint32_t fr2_delta = (fr2_idx_now - fr2_prev_write_idx) & FR2_RING_MASK;
+        if (fr2_delta > fr1_delta)
         {
-            start_idx = veh_prev_write_idx;
-            idx = veh_idx_now;
-            is_vehicle = true;
-            veh_prev_write_idx = veh_idx_now;
+            start_idx = fr2_prev_write_idx;
+            idx = fr2_idx_now;
+            is_fr2 = true;
+            fr2_prev_write_idx = fr2_idx_now;
         }
         else
         {
-            start_idx = ecu_prev_write_idx;
-            idx = ecu_idx_now;
-            ecu_prev_write_idx = ecu_idx_now;
+            start_idx = fr1_prev_write_idx;
+            idx = fr1_idx_now;
+            fr1_prev_write_idx = fr1_idx_now;
         }
     }
 
-    // Fast-path: extract 5-byte header from ring buffer at start_idx
     {
-        volatile uint8_t *ring_base = is_vehicle ? vehicle_ring_buffer : ecu_ring_buffer;
-        uint32_t ring_mask = is_vehicle ? VEH_RING_MASK : ECU_RING_MASK;
+        volatile uint8_t *ring_base = is_fr2 ? fr2_ring_buffer : fr1_ring_buffer;
+        uint32_t ring_mask = is_fr2 ? FR2_RING_MASK : FR1_RING_MASK;
 
         uint8_t h0 = ring_base[(start_idx + 0) & ring_mask];
         uint8_t h1 = ring_base[(start_idx + 1) & ring_mask];
-        // uint8_t h2 = ring_base[(start_idx + 2) & ring_mask];
-        // uint8_t h3 = ring_base[(start_idx + 3) & ring_mask];
         uint8_t h4 = ring_base[(start_idx + 4) & ring_mask];
-        // (void)h3; // silence unused warnings; kept for clarity/extension
         current_frame_id = (uint16_t)(((uint16_t)(h0 & 0x07) << 8) | h1);
         current_cycle_count = (uint8_t)(h4 & 0x3F);
 
         try_inject_frame(current_frame_id, current_cycle_count);
     }
 
-    // Encode: [31]=source(1=VEH), [30:12]=seq(19 bits), [11:0]=ring index (4KB ring)
-    uint32_t encoded = notify_encode(is_vehicle, ((irq_counter++) & 0x7FFFF), idx);
+    uint32_t encoded = notify_encode(is_fr2, 0, ((irq_counter++) & 0x3FFFF), (uint16_t)idx);
     (void)notify_queue_push(encoded);
-    // Set GPIO7 low to indicate ISR exit (idle)
     sio_hw->gpio_clr = (1u << 7);
 }
 
-void setup_stream(PIO pio,
-                  uint rx_pin_from_ecu, uint tx_en_pin_to_vehicle,
-                  uint rx_pin_from_vehicle, uint tx_en_pin_to_ecu)
+// ===================== FR3/FR4 IRQ handler =====================
+// Only records frame IDs seen on each channel for demuxing FR1/FR2.
+// Does NOT push to the notify queue.
+void __time_critical_func(streamer_fr34_irq0_handler)(void)
 {
-    // --- Store PIO and SM for reset ---
+    sio_hw->gpio_set = (1u << 7);
+    pio_interrupt_clear(streamer_pio_fr34, 3);
+
+    uint32_t fr3_idx_now = dma_ring_write_idx(dma_data_from_fr3_chan, fr3_ring_buffer, FR3_RING_MASK);
+    uint32_t fr4_idx_now = dma_ring_write_idx(dma_data_from_fr4_chan, fr4_ring_buffer, FR4_RING_MASK);
+
+    if (fr3_idx_now != fr3_prev_write_idx) {
+        uint32_t start = fr3_prev_write_idx;
+        uint8_t h0 = fr3_ring_buffer[(start + 0) & FR3_RING_MASK];
+        uint8_t h1 = fr3_ring_buffer[(start + 1) & FR3_RING_MASK];
+        uint16_t fid = (uint16_t)(((uint16_t)(h0 & 0x07) << 8) | h1);
+        record_frame_id(fr3_seen_ids, fid);
+        fr3_prev_write_idx = fr3_idx_now;
+    }
+
+    if (fr4_idx_now != fr4_prev_write_idx) {
+        uint32_t start = fr4_prev_write_idx;
+        uint8_t h0 = fr4_ring_buffer[(start + 0) & FR4_RING_MASK];
+        uint8_t h1 = fr4_ring_buffer[(start + 1) & FR4_RING_MASK];
+        uint16_t fid = (uint16_t)(((uint16_t)(h0 & 0x07) << 8) | h1);
+        record_frame_id(fr4_seen_ids, fid);
+        fr4_prev_write_idx = fr4_idx_now;
+    }
+
+    sio_hw->gpio_clr = (1u << 7);
+}
+
+// ===================== FR1/FR2 setup =====================
+void setup_stream(PIO pio,
+                  uint rx_pin_from_fr1, uint tx_en_pin_to_fr2,
+                  uint rx_pin_from_fr2, uint tx_en_pin_to_fr1)
+{
     streamer_pio = pio;
 
-    // --- PIO Setup ---
     uint offset = pio_add_program(pio, &flexray_bss_streamer_program);
-    uint sm_from_ecu = pio_claim_unused_sm(pio, true);
-    uint sm_from_vehicle = pio_claim_unused_sm(pio, true);
+    uint sm_fr1 = pio_claim_unused_sm(pio, true);
+    uint sm_fr2 = pio_claim_unused_sm(pio, true);
 
-    streamer_sm_from_ecu = sm_from_ecu;
-    streamer_sm_from_vehicle = sm_from_vehicle;
+    streamer_sm_fr1 = sm_fr1;
+    streamer_sm_fr2 = sm_fr2;
 
-    flexray_bss_streamer_program_init(pio, sm_from_ecu, offset, rx_pin_from_ecu, tx_en_pin_to_vehicle);
-    flexray_bss_streamer_program_init(pio, sm_from_vehicle, offset, rx_pin_from_vehicle, tx_en_pin_to_ecu);
-    dma_data_from_ecu_chan = dma_claim_unused_channel(true);
-    dma_data_from_vehicle_chan = dma_claim_unused_channel(true);
-    dma_channel_config dma_c_from_ecu = dma_channel_get_default_config(dma_data_from_ecu_chan);
-    dma_channel_config dma_c_from_vehicle = dma_channel_get_default_config(dma_data_from_vehicle_chan);
-    channel_config_set_transfer_data_size(&dma_c_from_ecu, DMA_SIZE_8);
-    channel_config_set_transfer_data_size(&dma_c_from_vehicle, DMA_SIZE_8);
-    channel_config_set_read_increment(&dma_c_from_ecu, false);                               // Always read from same FIFO
-    channel_config_set_read_increment(&dma_c_from_vehicle, false);                           // Always read from same FIFO
-    channel_config_set_write_increment(&dma_c_from_ecu, true);                               // Write to sequential buffer locations
-    channel_config_set_write_increment(&dma_c_from_vehicle, true);                           // Write to sequential buffer locations
-    channel_config_set_dreq(&dma_c_from_ecu, pio_get_dreq(pio, sm_from_ecu, false));         // Paced by PIO RX
-    channel_config_set_dreq(&dma_c_from_vehicle, pio_get_dreq(pio, sm_from_vehicle, false)); // Paced by PIO RX
+    flexray_bss_streamer_program_init(pio, sm_fr1, offset, rx_pin_from_fr1, tx_en_pin_to_fr2);
+    flexray_bss_streamer_program_init(pio, sm_fr2, offset, rx_pin_from_fr2, tx_en_pin_to_fr1);
+    dma_data_from_fr1_chan = dma_claim_unused_channel(true);
+    dma_data_from_fr2_chan = dma_claim_unused_channel(true);
+    dma_channel_config dma_c_fr1 = dma_channel_get_default_config(dma_data_from_fr1_chan);
+    dma_channel_config dma_c_fr2 = dma_channel_get_default_config(dma_data_from_fr2_chan);
+    channel_config_set_transfer_data_size(&dma_c_fr1, DMA_SIZE_8);
+    channel_config_set_transfer_data_size(&dma_c_fr2, DMA_SIZE_8);
+    channel_config_set_read_increment(&dma_c_fr1, false);
+    channel_config_set_read_increment(&dma_c_fr2, false);
+    channel_config_set_write_increment(&dma_c_fr1, true);
+    channel_config_set_write_increment(&dma_c_fr2, true);
+    channel_config_set_dreq(&dma_c_fr1, pio_get_dreq(pio, sm_fr1, false));
+    channel_config_set_dreq(&dma_c_fr2, pio_get_dreq(pio, sm_fr2, false));
 
-    // Configure write-address ring for continuous circular write
-    uint8_t ecu_ring_bits = 0;
-    if (ECU_RING_SIZE_BYTES > 1)
+    uint8_t fr1_ring_bits = 0;
+    if (FR1_RING_SIZE_BYTES > 1)
     {
-        ecu_ring_bits = 32 - __builtin_clz(ECU_RING_SIZE_BYTES - 1);
+        fr1_ring_bits = 32 - __builtin_clz(FR1_RING_SIZE_BYTES - 1);
     }
-    channel_config_set_ring(&dma_c_from_ecu, true, ecu_ring_bits); // true = wrap write address
+    channel_config_set_ring(&dma_c_fr1, true, fr1_ring_bits);
 
-    uint8_t veh_ring_bits = 0;
-    if (VEH_RING_SIZE_BYTES > 1)
+    uint8_t fr2_ring_bits = 0;
+    if (FR2_RING_SIZE_BYTES > 1)
     {
-        veh_ring_bits = 32 - __builtin_clz(VEH_RING_SIZE_BYTES - 1);
+        fr2_ring_bits = 32 - __builtin_clz(FR2_RING_SIZE_BYTES - 1);
     }
-    channel_config_set_ring(&dma_c_from_vehicle, true, veh_ring_bits); // true = wrap write address
-    // Chain each data channel to its rearm channel
-    dma_rearm_ecu_chan = dma_claim_unused_channel(true);
-    dma_rearm_vehicle_chan = dma_claim_unused_channel(true);
-    channel_config_set_chain_to(&dma_c_from_ecu, dma_rearm_ecu_chan);
-    channel_config_set_chain_to(&dma_c_from_vehicle, dma_rearm_vehicle_chan);
+    channel_config_set_ring(&dma_c_fr2, true, fr2_ring_bits);
+    dma_rearm_fr1_chan = dma_claim_unused_channel(true);
+    dma_rearm_fr2_chan = dma_claim_unused_channel(true);
+    channel_config_set_chain_to(&dma_c_fr1, dma_rearm_fr1_chan);
+    channel_config_set_chain_to(&dma_c_fr2, dma_rearm_fr2_chan);
 
-    // Configure data channels
-    dma_channel_configure(dma_data_from_ecu_chan, &dma_c_from_ecu,
-                          (void *)ecu_ring_buffer,       // Destination: ECU ring base
-                          &pio->rxf[sm_from_ecu],        // Source: PIO RX FIFO
+    dma_channel_configure(dma_data_from_fr1_chan, &dma_c_fr1,
+                          (void *)fr1_ring_buffer,
+                          &pio->rxf[sm_fr1],
                           DMA_BLOCK_COUNT_BYTES,
                           true);
-    dma_channel_configure(dma_data_from_vehicle_chan, &dma_c_from_vehicle,
-                          (void *)vehicle_ring_buffer,   // Destination: VEHICLE ring base
-                          &pio->rxf[sm_from_vehicle],    // Source: PIO RX FIFO
+    dma_channel_configure(dma_data_from_fr2_chan, &dma_c_fr2,
+                          (void *)fr2_ring_buffer,
+                          &pio->rxf[sm_fr2],
                           DMA_BLOCK_COUNT_BYTES,
                           true);
 
@@ -256,7 +305,76 @@ void setup_stream(PIO pio,
 
     pio_interrupt_clear(pio, 3);
     pio_interrupt_clear(pio, 7);
-    pio_sm_set_enabled(pio, sm_from_ecu, true);
-    pio_sm_set_enabled(pio, sm_from_vehicle, true);
+    pio_sm_set_enabled(pio, sm_fr1, true);
+    pio_sm_set_enabled(pio, sm_fr2, true);
+}
 
+// ===================== FR3/FR4 setup =====================
+void setup_stream_fr34(PIO pio,
+                       uint rx_pin_from_fr3, uint tx_en_pin_to_fr4,
+                       uint rx_pin_from_fr4, uint tx_en_pin_to_fr3)
+{
+    streamer_pio_fr34 = pio;
+
+    uint offset = pio_add_program(pio, &flexray_bss_streamer_program);
+    uint sm_fr3 = pio_claim_unused_sm(pio, true);
+    uint sm_fr4 = pio_claim_unused_sm(pio, true);
+
+    streamer_sm_fr3 = sm_fr3;
+    streamer_sm_fr4 = sm_fr4;
+
+    flexray_bss_streamer_program_init(pio, sm_fr3, offset, rx_pin_from_fr3, tx_en_pin_to_fr4);
+    flexray_bss_streamer_program_init(pio, sm_fr4, offset, rx_pin_from_fr4, tx_en_pin_to_fr3);
+
+    dma_data_from_fr3_chan = dma_claim_unused_channel(true);
+    dma_data_from_fr4_chan = dma_claim_unused_channel(true);
+    dma_channel_config dma_c_fr3 = dma_channel_get_default_config(dma_data_from_fr3_chan);
+    dma_channel_config dma_c_fr4 = dma_channel_get_default_config(dma_data_from_fr4_chan);
+    channel_config_set_transfer_data_size(&dma_c_fr3, DMA_SIZE_8);
+    channel_config_set_transfer_data_size(&dma_c_fr4, DMA_SIZE_8);
+    channel_config_set_read_increment(&dma_c_fr3, false);
+    channel_config_set_read_increment(&dma_c_fr4, false);
+    channel_config_set_write_increment(&dma_c_fr3, true);
+    channel_config_set_write_increment(&dma_c_fr4, true);
+    channel_config_set_dreq(&dma_c_fr3, pio_get_dreq(pio, sm_fr3, false));
+    channel_config_set_dreq(&dma_c_fr4, pio_get_dreq(pio, sm_fr4, false));
+
+    uint8_t fr3_ring_bits = 0;
+    if (FR3_RING_SIZE_BYTES > 1)
+    {
+        fr3_ring_bits = 32 - __builtin_clz(FR3_RING_SIZE_BYTES - 1);
+    }
+    channel_config_set_ring(&dma_c_fr3, true, fr3_ring_bits);
+
+    uint8_t fr4_ring_bits = 0;
+    if (FR4_RING_SIZE_BYTES > 1)
+    {
+        fr4_ring_bits = 32 - __builtin_clz(FR4_RING_SIZE_BYTES - 1);
+    }
+    channel_config_set_ring(&dma_c_fr4, true, fr4_ring_bits);
+
+    dma_rearm_fr3_chan = dma_claim_unused_channel(true);
+    dma_rearm_fr4_chan = dma_claim_unused_channel(true);
+    channel_config_set_chain_to(&dma_c_fr3, dma_rearm_fr3_chan);
+    channel_config_set_chain_to(&dma_c_fr4, dma_rearm_fr4_chan);
+
+    dma_channel_configure(dma_data_from_fr3_chan, &dma_c_fr3,
+                          (void *)fr3_ring_buffer,
+                          &pio->rxf[sm_fr3],
+                          DMA_BLOCK_COUNT_BYTES,
+                          true);
+    dma_channel_configure(dma_data_from_fr4_chan, &dma_c_fr4,
+                          (void *)fr4_ring_buffer,
+                          &pio->rxf[sm_fr4],
+                          DMA_BLOCK_COUNT_BYTES,
+                          true);
+
+    pio_set_irq0_source_enabled(pio, pis_interrupt3, true);
+    irq_set_exclusive_handler(pio_get_irq_num(pio, 0), streamer_fr34_irq0_handler);
+    irq_set_enabled(pio_get_irq_num(pio, 0), true);
+
+    pio_interrupt_clear(pio, 3);
+    pio_interrupt_clear(pio, 7);
+    pio_sm_set_enabled(pio, sm_fr3, true);
+    pio_sm_set_enabled(pio, sm_fr4, true);
 }

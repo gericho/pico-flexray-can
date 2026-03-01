@@ -11,9 +11,13 @@
 #define FRAME_BUF_SIZE_BYTES 8 + MAX_FRAME_PAYLOAD_BYTES
 #define MAX_FRAME_BUF_SIZE_BYTES 264
 
-#define FROM_ECU 0
-#define FROM_VEHICLE 1
-#define FROM_UNKNOWN 0xff
+// 4-bit bitmask: each bit indicates the frame was seen on that source.
+// e.g. FR1 + FR3 = 0b1010
+#define FROM_FR1 (1u << 3)  // 0b1000
+#define FROM_FR2 (1u << 2)  // 0b0100
+#define FROM_FR3 (1u << 1)  // 0b0010
+#define FROM_FR4 (1u << 0)  // 0b0001
+#define FROM_UNKNOWN 0
 
 // FlexRay frame structure definition based on specification
 typedef struct

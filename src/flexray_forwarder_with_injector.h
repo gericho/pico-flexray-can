@@ -12,8 +12,10 @@ void try_cache_last_target_frame(uint16_t frame_id, uint8_t cycle_count, uint16_
 void try_inject_frame(uint16_t frame_id, uint8_t cycle_count);
 
 void setup_forwarder_with_injector(PIO pio,
-    uint rx_pin_from_ecu, uint tx_pin_to_vehicle,
-    uint rx_pin_from_vehicle, uint tx_pin_to_ecu);
+    uint rx_pin_from_fr1, uint tx_pin_to_fr2,
+    uint rx_pin_from_fr2, uint tx_pin_to_fr1,
+    uint rx_pin_from_fr3, uint tx_pin_to_fr4,
+    uint rx_pin_from_fr4, uint tx_pin_to_fr3);
 
 // Submit a host-provided replacement slice to be used on next matching injection
 // bytes must contain only the replacement payload slice; length must equal rule->replace_len
