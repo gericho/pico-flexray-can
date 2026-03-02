@@ -98,9 +98,10 @@ uint8_t lookup_frame_source(uint16_t frame_id)
     if (frame_id >= 2048) return FROM_UNKNOWN;
     uint32_t word = frame_id >> 5;
     uint32_t bit = 1u << (frame_id & 0x1F);
-    if (fr3_seen_ids[word] & bit) return FROM_FR3;
-    if (fr4_seen_ids[word] & bit) return FROM_FR4;
-    return FROM_UNKNOWN;
+    uint8_t result = FROM_UNKNOWN;
+    if (fr3_seen_ids[word] & bit) result |= FROM_FR3;
+    if (fr4_seen_ids[word] & bit) result |= FROM_FR4;
+    return result;
 }
 
 void notify_queue_init(void)

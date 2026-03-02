@@ -12,6 +12,27 @@
 // Add near top after includes
 static absolute_time_t last_usb_activity = 0;
 
+// Bitmask-to-decimal: each set bit contributes its channel number as a digit.
+// Index is the 4-bit source bitmask (FR1=bit3, FR2=bit2, FR3=bit1, FR4=bit0).
+static const uint8_t source_decimal[16] = {
+    0,    // 0b0000  unknown
+    4,    // 0b0001  FR4
+    3,    // 0b0010  FR3
+    34,   // 0b0011  FR3+FR4
+    2,    // 0b0100  FR2
+    24,   // 0b0101  FR2+FR4
+    23,   // 0b0110  FR2+FR3
+    234,  // 0b0111  FR2+FR3+FR4
+    1,    // 0b1000  FR1
+    14,   // 0b1001  FR1+FR4
+    13,   // 0b1010  FR1+FR3
+    134,  // 0b1011  FR1+FR3+FR4
+    12,   // 0b1100  FR1+FR2
+    124,  // 0b1101  FR1+FR2+FR4
+    123,  // 0b1110  FR1+FR2+FR3
+    0,    // 0b1111  all (overflow, should not happen)
+};
+
 // FlexRay FIFO
 static flexray_fifo_t flexray_fifo;
 
@@ -568,7 +589,7 @@ static bool try_send_from_fifo(const char *context)
         outbuf[0] = (uint8_t)(body_len & 0xFF);
         outbuf[1] = (uint8_t)((body_len >> 8) & 0xFF);
         size_t w = 2;
-        outbuf[w++] = frame.source;
+        outbuf[w++] = source_decimal[frame.source & 0x0F];
 
         // Reconstruct 5-byte header
         uint8_t byte0 = (uint8_t)((frame.indicators << 3) | ((frame.frame_id >> 8) & 0x07));
