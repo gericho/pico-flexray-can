@@ -355,7 +355,12 @@ int main(void)
                 else if (is_valid_frame(&frame, header))
                 {
                     stats.valid++;
-                    // Demux: OR in the FR3/FR4 channel bit
+
+                    static uint8_t prev_cycle_for_clear = 0xFF;
+                    if (frame.cycle_count == 0 && prev_cycle_for_clear != 0)
+                        clear_frame_source_bitmaps();
+                    prev_cycle_for_clear = frame.cycle_count;
+
                     uint8_t demuxed = lookup_frame_source(frame.frame_id);
                     if (demuxed != FROM_UNKNOWN) {
                         frame.source |= demuxed;

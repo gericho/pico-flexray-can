@@ -104,6 +104,12 @@ uint8_t lookup_frame_source(uint16_t frame_id)
     return result;
 }
 
+void clear_frame_source_bitmaps(void)
+{
+    memset((void *)fr3_seen_ids, 0, sizeof(fr3_seen_ids));
+    memset((void *)fr4_seen_ids, 0, sizeof(fr4_seen_ids));
+}
+
 void notify_queue_init(void)
 {
     notify_head = 0;
