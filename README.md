@@ -9,9 +9,12 @@
 
 ## Experimental Status
 
-An OLED display has been added, the watchdog heartbeat output is now driven by firmware, and there is early CAN support in this branch.
-
-This work is experimental and should currently be considered BROKEN.
+- Added OLED display support.
+- Added firmware-driven watchdog heartbeat on `GPIO20`.
+- Set `FR1/FR2` relay control to `GPIO25` and drive it high at boot.
+- Set `FR3/FR4` relay control to `GPIO24` and drive it high at boot.
+- Proper CAN support is still incomplete.
+- This firmware should still be considered experimental and currently `BROKEN`.
 
 A Raspberry Pi Pico-based FlexRay man-in-the-middle (MITM) bridge that forwards frames between ECU and vehicle transceivers, with optional test replay output and a Panda-compatible USB interface.
 
