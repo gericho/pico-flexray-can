@@ -21,34 +21,6 @@ A Raspberry Pi Pico-based FlexRay man-in-the-middle (MITM) bridge that forwards 
   - USB interface is Panda-compatible
   - FlexRay MITM Done
 
-### Hardware connections
-1. For read-only FlexRay frame capture, connect a single transceiver to the vehicle’s bus, attach its BP/BM lines to the FlexRay lines in your vehicle.
-2. To differentiate frames from the ECU and the vehicle, use a man-in-the-middle (MITM) setup: split the original FlexRay cable and connect each half to its own transceiver with separate BP/BM pairs—one transceiver for the ECU side, one for the vehicle side.
-3. To perform a test, connect the REPLAY_TX pin to either RXD_FROM_ECU or RXD_FROM_VEHICLE. This will allow you to observe frames in Cabana.
-
-Refer to your board’s pinout for physical pad/header locations. Signals below use Pico GPIO numbers as configured in `src/main.c`.
-
-| GPIO | Signal | Direction | Side | Notes |
-|---:|---|---|---|---|
-| 2 | `BGE` | Output | Both | BGE to FlexRay transceivers (set High to enable)
-| 3 | `STBN` | Output | Both | STBN to transceivers (set High to exit standby)
-| 4 | `TXD_TO_ECU` | Output | ECU | TXD to ECU-side transceiver
-| 5 | `TXEN_TO_ECU` | Output | ECU | TX_EN for ECU-side transceiver
-| 6 | `RXD_FROM_ECU` | Input | ECU | RXD from ECU-side transceiver
-| 28 | `TXD_TO_VEHICLE` | Output | Vehicle | TXD to vehicle-side transceiver
-| 27 | `TXEN_TO_VEHICLE` | Output | Vehicle | TX_EN for vehicle-side transceiver
-| 26 | `RXD_FROM_VEHICLE` | Input | Vehicle | RXD from vehicle-side transceiver
-| 15 | `REPLAY_TX` | Output | Test | PIO replay/test sample FlexRay frame output
-| 7 | `ISR` | Output | Measurement | Use a logic analyzer to measure the frame preparation time consumption.
-
-![Wiring diagram](imgs/wiring.png)
-**Note:**  
-You can use any FlexRay transceiver you have available. The following transceivers are pin-to-pin compatible and can be used interchangeably:
-- TLE9222
-- TJA1082
-- NCV7383
-
-
 ### Build and flash
 
 ```bash
