@@ -16,6 +16,23 @@
 - Proper CAN support is still incomplete.
 - This firmware should still be considered experimental and currently `BROKEN`.
 
+## Experimental CAN RX-Only
+
+Experimental Classical CAN RX-only @ 500 kbps.
+
+- Added an experimental CAN RX-only software sniffer for the Czok V2 board.
+- The current implementation is fixed at `500 kbps`.
+- Current board mapping used by the sniffer:
+- `CAN RX` on `GPIO46`
+- `CAN STB` on `GPIO45`
+- `CAN relay` on `GPIO41`
+- The sniffer uses `core1` for software sampling and frame decoding.
+- It attempts to decode standard and extended CAN frames, including bit de-stuffing and CRC validation.
+- Decoded frames are forwarded to `core0` and printed on UART for early bring-up and validation.
+- OLED status now includes basic CAN RX counters.
+- This is an early bring-up implementation and has not yet been validated on real hardware.
+- It should be considered experimental and may still miss frames or decode invalid data.
+
 A Raspberry Pi Pico-based FlexRay man-in-the-middle (MITM) bridge that forwards frames between ECU and vehicle transceivers, with optional test replay output and a Panda-compatible USB interface.
 
 - Core features:

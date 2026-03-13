@@ -23,6 +23,7 @@
 #include "flexray_bss_streamer.h"
 #include "flexray_forwarder_with_injector.h"
 #include "ssd1306_sw.h"
+#include "can_bus.h"
 
 #define SRAM __attribute__((section(".data")))
 #define FLASH __attribute__((section(".rodata")))
@@ -68,6 +69,7 @@ static void print_ram_usage(void) {
 #define WATCHDOG_TOGGLE_PIN 20
 #define RELAY_FR_1_2 25
 #define RELAY_FR_3_4 24
+#define CAN_RELAY_PIN 41
 
 #define TXD_FR_1_PIN 28
 #define TXEN_FR_1_PIN 27
@@ -98,6 +100,9 @@ void print_pin_assignments(void)
     printf("FR2 Transceiver Pins: RXD=%02d, TXD=%02d, TXEN=%02d\n", RXD_FR_2_PIN, TXD_FR_2_PIN, TXEN_FR_2_PIN);
     printf("FR3 Transceiver Pins: RXD=%02d, TXD=%02d, TXEN=%02d\n", RXD_FR_3_PIN, TXD_FR_3_PIN, TXEN_FR_3_PIN);
     printf("FR4 Transceiver Pins: RXD=%02d, TXD=%02d, TXEN=%02d\n", RXD_FR_4_PIN, TXD_FR_4_PIN, TXEN_FR_4_PIN);
+    printf("Watchdog Pin: %02d\n", WATCHDOG_TOGGLE_PIN);
+    printf("FR Relay Pins: FR1/2=%02d, FR3/4=%02d\n", RELAY_FR_1_2, RELAY_FR_3_4);
+    printf("CAN Relay Pin: %02d\n", CAN_RELAY_PIN);
 }
 
 typedef struct {
@@ -140,9 +145,12 @@ void core1_entry(void)
     setup_stream_fr34(pio1,
                       RXD_FR_3_PIN, TXEN_FR_4_PIN,
                       RXD_FR_4_PIN, TXEN_FR_3_PIN);
+
+    can_bus_worker_init();
+
     while (1)
     {
-        __wfi();
+        can_bus_worker_poll();
     }
 }
 
@@ -233,7 +241,15 @@ static void update_display(const stream_stats_t *stats, bool watchdog_pin_state)
     snprintf(line, sizeof(line), "F3 %lu F4 %lu", (unsigned long)stats->source_fr3, (unsigned long)stats->source_fr4);
     ssd1306_draw_string(0, 48, line);
 
-    snprintf(line, sizeof(line), "SEQ %lu", (unsigned long)stats->seq_gap);
+    can_bus_status_t can_status;
+    can_bus_get_status(&can_status);
+    if (can_status.started) {
+        snprintf(line, sizeof(line), "C%luK RX%lu",
+                 (unsigned long)(can_status.bitrate / 1000u),
+                 (unsigned long)(can_status.rx_total % 10000u));
+    } else {
+        snprintf(line, sizeof(line), "CAN BLOCKED");
+    }
     ssd1306_draw_string(0, 56, line);
     ssd1306_present();
 }
@@ -265,6 +281,8 @@ int main(void)
 
     bool display_ready = ssd1306_init();
     printf("OLED display %s on GPIO29 SDA GPIO30 SCL\n", display_ready ? "ready" : "not found");
+
+    can_bus_init();
 
     printf("Actual system clock: %lu Hz\n", clock_get_hz(clk_sys));
     printf("\n--- FlexRay Continuous Streaming Bridge (Forwarder Mode) ---\n");
@@ -315,6 +333,21 @@ int main(void)
         {
             next_display_update_time = make_timeout_time_ms(250);
             update_display(&stats, watchdog_pin_state);
+        }
+
+        can_bus_frame_t can_frame;
+        for (int i = 0; i < 4 && can_bus_pop_frame(&can_frame); ++i)
+        {
+            printf("CAN RX %s ID=0x%lx DLC=%u DATA=", can_frame.extended ? "EXT" : "STD", (unsigned long)can_frame.id, can_frame.dlc);
+            for (uint8_t b = 0; b < can_frame.dlc; ++b)
+            {
+                printf("%02x", can_frame.data[b]);
+                if ((uint8_t)(b + 1u) < can_frame.dlc)
+                {
+                    printf(" ");
+                }
+            }
+            printf(" TS=%luus\n", (unsigned long)can_frame.timestamp_us);
         }
 
         // Consume frame-end notifications from core1 (FR1/FR2 only;

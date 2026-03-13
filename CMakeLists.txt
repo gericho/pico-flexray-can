@@ -45,6 +45,8 @@ add_executable(pico_flexray
      src/flexray_fowarder_with_injector.c
      src/flexray_fifo.c
      src/ssd1306_sw.c
+     src/can2040.c
+     src/can_bus.c
      )
 
 pico_set_program_name(pico_flexray "pico_flexray")

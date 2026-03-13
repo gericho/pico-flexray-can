@@ -7,6 +7,7 @@
 #include "flexray_frame.h"
 #include "flexray_fifo.h"
 #include "flexray_forwarder_with_injector.h"
+#include "can_bus.h"
 #include <string.h>
 
 // Add near top after includes
@@ -219,15 +220,17 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
         break;
 
     case PANDA_GET_CAN_HEALTH_STATS:
-        struct can_health_t * can_health = (struct can_health_t*)response_data;
-        can_health->can_speed = 0;
-        can_health->can_data_speed = 0;
-        can_health->canfd_enabled = 0;
-        can_health->brs_enabled = 0;
-        can_health->canfd_non_iso = 0;
-        response_len = sizeof(struct can_health_t);
-        memcpy(response_data, can_health, response_len);
-        // printf("Control Read: GET_CAN_HEALTH_STATS\n");
+        {
+            can_bus_status_t can_status;
+            struct can_health_t *can_health = (struct can_health_t *)response_data;
+            memset(can_health, 0, sizeof(*can_health));
+            can_bus_get_status(&can_status);
+            can_health->can_speed = can_status.started ? (uint16_t)(can_status.bitrate / 1000u) : 0;
+            can_health->receive_error_cnt = (uint8_t)(can_status.parse_error > 255u ? 255u : can_status.parse_error);
+            can_health->transmit_error_cnt = (uint8_t)(can_status.error_count > 255u ? 255u : can_status.error_count);
+            response_len = sizeof(struct can_health_t);
+            // printf("Control Read: GET_CAN_HEALTH_STATS\n");
+        }
         break;
 
     // case PANDA_GET_MCU_UID:
@@ -330,6 +333,7 @@ static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *r
     case PANDA_RESET_CAN_COMMS:
         // printf("Control Write: RESET_CAN_COMMS (request=0x%02x)\n", request->bRequest);
         flexray_fifo_init(&flexray_fifo);
+        can_bus_reset();
         handled = true;
         break;
 
@@ -428,13 +432,14 @@ static bool handle_control_data_stage(tusb_control_request_t const *request, uin
             uint16_t bus_id = data[0] | (data[1] << 8);
             uint16_t speed_kbps = data[2] | (data[3] << 8);
 
-            if (bus_id < 3) // We support up to 3 CAN buses
+            if (bus_id == 0)
             {
-                printf("Control Data: SET_CAN_SPEED_KBPS bus=%d speed=%d kbps\n", bus_id, speed_kbps);
+                bool ok = can_bus_set_bitrate((uint32_t)speed_kbps * 1000u);
+                printf("Control Data: SET_CAN_SPEED_KBPS bus=%d speed=%d kbps -> %s (runtime currently blocked by PIO allocation)\n", bus_id, speed_kbps, ok ? "applied" : "stored only");
             }
             else
             {
-                printf("Control Data: SET_CAN_SPEED_KBPS invalid bus_id=%d\n", bus_id);
+                printf("Control Data: SET_CAN_SPEED_KBPS unsupported bus_id=%d\n", bus_id);
             }
         }
         else
