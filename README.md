@@ -1,8 +1,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/dynm/pico-flexray)
 
-### pico-flexray — Low Cost FlexRay MITM Module
-<img src="./imgs/pico-flexray-bmw-g30.webp" alt="pico-flexray BMW G30 example" width="600"/>
-<img src="./imgs/openpilot-lateral-bmw-g30.webp" alt="OpenPilot BMW G30 example" width="600"/>
+### pico-flexray-can — Based on Czok V2 Board Work
 
 ## Experimental Status
 
