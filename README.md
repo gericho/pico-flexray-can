@@ -4,6 +4,12 @@
 <img src="./imgs/pico-flexray-bmw-g30.webp" alt="pico-flexray BMW G30 example" width="600"/>
 <img src="./imgs/openpilot-lateral-bmw-g30.webp" alt="OpenPilot BMW G30 example" width="600"/>
 
+## Experimental Status
+
+An OLED display has been added, the watchdog heartbeat output is now driven by firmware, and there is early CAN support in this branch.
+
+This work is experimental and should currently be considered BROKEN.
+
 A Raspberry Pi Pico-based FlexRay man-in-the-middle (MITM) bridge that forwards frames between ECU and vehicle transceivers, with optional test replay output and a Panda-compatible USB interface.
 
 - Core features:
