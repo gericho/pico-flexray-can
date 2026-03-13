@@ -1,6 +1,11 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/dynm/pico-flexray)
 
-### pico-flexray-can — Based on Czok V2 Board Work
+### pico-flexray-can
+
+## Credits
+
+- Czok
+- dynm
 
 ## Experimental Status
 
