@@ -4,8 +4,8 @@
 
 ## Credits
 
-- Czok
-- dynm
+- Czok for the new V2 board hardware work and board bring-up details.
+- dynm for the original [`pico-flexray`](https://github.com/dynm/pico-flexray) firmware repository this project builds on.
 
 ## Experimental Status
 
