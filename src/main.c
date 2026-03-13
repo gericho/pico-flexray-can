@@ -22,6 +22,7 @@
 #include "panda_usb.h"
 #include "flexray_bss_streamer.h"
 #include "flexray_forwarder_with_injector.h"
+#include "ssd1306_sw.h"
 
 #define SRAM __attribute__((section(".data")))
 #define FLASH __attribute__((section(".rodata")))
@@ -64,9 +65,9 @@ static void print_ram_usage(void) {
 #define BGE_PIN 2
 #define STBN_PIN 3
 
-#define LED_PIN 20
-#define RELAY_FR_1_2 17
-#define RELAY_FR_3_4 18
+#define WATCHDOG_TOGGLE_PIN 20
+#define RELAY_FR_1_2 25
+#define RELAY_FR_3_4 24
 
 #define TXD_FR_1_PIN 28
 #define TXEN_FR_1_PIN 27
@@ -196,9 +197,45 @@ void setup_pins(void)
     gpio_set_dir(7, GPIO_OUT);
     gpio_put(7, 0);
 
-	// On-board LED
-	gpio_init(LED_PIN);
-	gpio_set_dir(LED_PIN, GPIO_OUT);
+	// Board v2 watchdog keepalive output.
+	gpio_init(WATCHDOG_TOGGLE_PIN);
+	gpio_set_dir(WATCHDOG_TOGGLE_PIN, GPIO_OUT);
+	gpio_put(WATCHDOG_TOGGLE_PIN, 0);
+}
+
+static void update_display(const stream_stats_t *stats, bool watchdog_pin_state)
+{
+    if (!ssd1306_is_ready()) {
+        return;
+    }
+
+    char line[17];
+    ssd1306_clear();
+
+    snprintf(line, sizeof(line), "R12 %u R34 %u", gpio_get(RELAY_FR_1_2) ? 1u : 0u, gpio_get(RELAY_FR_3_4) ? 1u : 0u);
+    ssd1306_draw_string(0, 0, line);
+
+    snprintf(line, sizeof(line), "WD %u D %lu", watchdog_pin_state ? 1u : 0u, (unsigned long)notify_queue_dropped());
+    ssd1306_draw_string(0, 8, line);
+
+    snprintf(line, sizeof(line), "UP %lus", (unsigned long)(time_us_32() / 1000000u));
+    ssd1306_draw_string(0, 16, line);
+
+    snprintf(line, sizeof(line), "VAL %lu", (unsigned long)stats->valid);
+    ssd1306_draw_string(0, 24, line);
+
+    snprintf(line, sizeof(line), "LEN %lu", (unsigned long)stats->len_ok);
+    ssd1306_draw_string(0, 32, line);
+
+    snprintf(line, sizeof(line), "F1 %lu F2 %lu", (unsigned long)stats->source_fr1, (unsigned long)stats->source_fr2);
+    ssd1306_draw_string(0, 40, line);
+
+    snprintf(line, sizeof(line), "F3 %lu F4 %lu", (unsigned long)stats->source_fr3, (unsigned long)stats->source_fr4);
+    ssd1306_draw_string(0, 48, line);
+
+    snprintf(line, sizeof(line), "SEQ %lu", (unsigned long)stats->seq_gap);
+    ssd1306_draw_string(0, 56, line);
+    ssd1306_present();
 }
 
 int main(void)
@@ -226,6 +263,9 @@ int main(void)
 
     print_pin_assignments();
 
+    bool display_ready = ssd1306_init();
+    printf("OLED display %s on GPIO29 SDA GPIO30 SCL\n", display_ready ? "ready" : "not found");
+
     printf("Actual system clock: %lu Hz\n", clock_get_hz(clk_sys));
     printf("\n--- FlexRay Continuous Streaming Bridge (Forwarder Mode) ---\n");
 
@@ -246,8 +286,9 @@ int main(void)
     uint8_t temp_buffer[MAX_FRAME_BUF_SIZE_BYTES];
 
 	absolute_time_t next_stats_print_time = make_timeout_time_ms(5000);
-	absolute_time_t next_led_toggle_time = make_timeout_time_ms(500);
-	bool led_on = false;
+	absolute_time_t next_display_update_time = make_timeout_time_ms(250);
+	absolute_time_t next_watchdog_toggle_time = make_timeout_time_ms(20);
+	bool watchdog_pin_state = false;
     // Track previous len_ok to compute parsed-frames FPS
     uint32_t prev_total = 0;
     uint32_t prev_valid = 0;
@@ -255,11 +296,11 @@ int main(void)
     while (true)
     {
         panda_usb_task();
-		if (time_reached(next_led_toggle_time))
+		if (time_reached(next_watchdog_toggle_time))
 		{
-			next_led_toggle_time = make_timeout_time_ms(500);
-			led_on = !led_on;
-			gpio_put(LED_PIN, led_on);
+			next_watchdog_toggle_time = make_timeout_time_ms(20);
+			watchdog_pin_state = !watchdog_pin_state;
+			gpio_put(WATCHDOG_TOGGLE_PIN, watchdog_pin_state);
 		}
         if (time_reached(next_stats_print_time))
         {
@@ -268,6 +309,12 @@ int main(void)
             prev_total = stats.len_ok;
             prev_valid = stats.valid;
             print_ram_usage();
+        }
+
+        if (time_reached(next_display_update_time))
+        {
+            next_display_update_time = make_timeout_time_ms(250);
+            update_display(&stats, watchdog_pin_state);
         }
 
         // Consume frame-end notifications from core1 (FR1/FR2 only;
