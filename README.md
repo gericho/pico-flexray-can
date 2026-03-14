@@ -35,7 +35,7 @@ For the V1 board:
 - The active FlexRay MITM pair used by this firmware is:
   - `CN4 / Flexray2` for SAS / ECU
   - `CN3 / Flexray1` for BDC / VEHICLE
-- External CAN is exposed on `CN13`
+- External CAN is exposed on `CN13 / CAN2`
 
 ## Build output
 
