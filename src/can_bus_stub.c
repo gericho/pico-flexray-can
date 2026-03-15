@@ -163,6 +163,13 @@ static void mcp_write32(uint16_t addr, uint32_t value) {
   can_spi_deselect();
 }
 
+static void mcp_write8(uint16_t addr, uint8_t value) {
+  can_spi_select();
+  mcp_send_header(MCP_CMD_WRITE, addr);
+  (void)can_spi_transfer_byte(value);
+  can_spi_deselect();
+}
+
 static void mcp_zero_message_ram(void) {
   static const uint8_t zeros[16] = {0};
   for (uint16_t addr = MCP_RAM_START; addr < MCP_RAM_END; addr += sizeof(zeros)) {
@@ -175,12 +182,6 @@ static void mcp_zero_message_ram(void) {
   }
 }
 
-static void mcp_update_bits(uint16_t addr, uint32_t mask, uint32_t value) {
-  uint32_t reg = mcp_read32(addr);
-  reg &= ~mask;
-  reg |= value & mask;
-  mcp_write32(addr, reg);
-}
 
 static bool mcp_wait_mode(uint8_t mode, uint32_t timeout_ms) {
   absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
@@ -388,9 +389,9 @@ void can_bus_poll(void) {
     can_bus_frame_t frame;
     g_debug_fifo_nonempty_count++;
     g_ua_ok = true;
-    mcp_read_bytes((uint16_t)(ua & 0x0fffu), obj, sizeof(obj));
+    mcp_read_bytes((uint16_t)((MCP_RAM_START + ua) & 0x0fffu), obj, sizeof(obj));
     g_obj_ok = true;
-    mcp_update_bits(MCP_REG_C1FIFOCON1, MCP_FIFO_UINC_BITS, MCP_FIFO_UINC_BITS);
+    mcp_write8(MCP_REG_C1FIFOCON1 + 1u, 1u);
     g_uinc_ok = true;
     g_parse_ok = parse_can_object(obj, &frame);
     if (g_parse_ok) {
