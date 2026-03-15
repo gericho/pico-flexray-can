@@ -48,6 +48,31 @@ Known V1 CAN path:
 - transceiver: `TCAN1042`
 - oscillator: `40 MHz`
 
+## Connector Labels
+
+Use the board silkscreen labels as follows:
+
+- `CN4 / Flexray2`
+  - connect to `SAS`
+  - this is the FlexRay `ECU side`
+  - logged as `src 0`
+
+- `CN3 / Flexray1`
+  - connect to the vehicle side / `BDC`
+  - this is the FlexRay `vehicle side`
+  - logged as `src 1`
+
+- `CN13 / CAN2`
+  - connect to BMW i3 `PT-CAN`
+  - this is the external CAN path through `MCP2518FD + TCAN1042`
+  - logged as `src 2` when the host `pandad` patch is present
+
+In short:
+
+- `CN4 / Flexray2 -> SAS / ECU side`
+- `CN3 / Flexray1 -> BDC / vehicle side`
+- `CN13 / CAN2 -> PT-CAN`
+
 ## USB Layout
 
 The firmware enumerates as one USB device with two vendor IN streams:
