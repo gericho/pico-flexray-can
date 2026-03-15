@@ -2,7 +2,7 @@
 
 Firmware for the Czok V1 board (`pico2_w`) with:
 
-- FlexRay MITM forwarding for BMW i3 reverse engineering
+- single-channel FlexRay MITM forwarding for BMW i3 reverse engineering
 - MCP2518FD-based classical CAN RX on `CN13`
 - USB streaming for both FlexRay and CAN
 
@@ -12,11 +12,15 @@ This repo is the working V1 branch, not a generic multi-board firmware.
 
 What works:
 
-- FlexRay MITM forwarding is stable
+- single-channel FlexRay MITM forwarding is stable
 - FlexRay USB streaming is stable
 - MCP2518FD bring-up is stable at `500 kbps`
 - CAN RX from the external bus is working
 - CAN is exported over a second USB endpoint and can be logged by a patched `pandad`
+
+Current limitation:
+
+- FlexRay forwarding is single-channel only for now
 
 What is intentionally not implemented:
 
