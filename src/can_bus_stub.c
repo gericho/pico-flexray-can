@@ -205,8 +205,8 @@ static bool mcp_request_mode(uint8_t mode) {
 static void mcp_configure_timing_500k(void) {
   // 500 kbps nominal timing for a 40 MHz CAN clock, keeping the controller in
   // passive classic-CAN observation mode.
-  // BRP=0, TSEG1=63, TSEG2=15, SJW=15 -> NBTCFG 0x0F0F3F00.
-  const uint32_t nbtcfg = (15u << 24) | (15u << 16) | (63u << 8) | 0u;
+  // Candidate from the original MCP2518FD driver branch.
+  const uint32_t nbtcfg = (1u << 24) | (30u << 16) | (7u << 8) | 7u;
   // Keep the data-phase timing benign; CAN2.0 listen-only relies on nominal timing.
   const uint32_t dbtcfg = (15u << 24) | (15u << 16) | (15u << 8) | 0u;
   mcp_write32(MCP_REG_C1NBTCFG, nbtcfg);
@@ -219,20 +219,7 @@ static void mcp_configure_interrupts_only(void) {
   mcp_write32(MCP_REG_C1INT, MCP_INT_RXIE_BITS);
 }
 
-static bool mcp_wait_fifo_reset_clear(uint16_t addr, uint32_t timeout_ms) {
-  absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
-  while (!time_reached(deadline)) {
-    if ((mcp_read32(addr) & MCP_FIFO_FRESET_BITS) == 0u) {
-      return true;
-    }
-    sleep_us(100);
-  }
-  return false;
-}
-
 static bool mcp_configure_queues_only(void) {
-  bool txq_ok = false;
-  bool fifo1_ok = false;
   g_debug_queue_flags = 0u;
 
   mcp_write32(MCP_REG_C1TXQCON,
@@ -253,19 +240,7 @@ static bool mcp_configure_queues_only(void) {
   g_debug_last_fifocon1 = mcp_read32(MCP_REG_C1FIFOCON1);
   g_debug_queue_flags |= (1u << 1);
 
-  txq_ok = mcp_wait_fifo_reset_clear(MCP_REG_C1TXQCON, 20u);
-  if (txq_ok) {
-    g_debug_queue_flags |= (1u << 2);
-  }
-
-  fifo1_ok = mcp_wait_fifo_reset_clear(MCP_REG_C1FIFOCON1, 20u);
-  if (fifo1_ok) {
-    g_debug_queue_flags |= (1u << 3);
-  }
-
-  g_debug_last_txqcon = mcp_read32(MCP_REG_C1TXQCON);
-  g_debug_last_fifocon1 = mcp_read32(MCP_REG_C1FIFOCON1);
-  return txq_ok && fifo1_ok;
+  return true;
 }
 
 static void mcp_configure_filters_only(void) {
@@ -487,6 +462,15 @@ bool can_bus_set_bitrate(uint32_t bitrate) {
     g_debug_init_flags |= (1u << 7);
   }
 
+  g_debug_last_txqcon = mcp_read32(MCP_REG_C1TXQCON);
+  g_debug_last_fifocon1 = mcp_read32(MCP_REG_C1FIFOCON1);
+  if ((g_debug_last_txqcon & MCP_FIFO_FRESET_BITS) == 0u) {
+    g_debug_queue_flags |= (1u << 2);
+  }
+  if ((g_debug_last_fifocon1 & MCP_FIFO_FRESET_BITS) == 0u) {
+    g_debug_queue_flags |= (1u << 3);
+  }
+
  done:
   g_debug_last_osc = mcp_read32(MCP_REG_OSC);
   g_debug_last_nbtcfg = mcp_read32(MCP_REG_C1NBTCFG);
@@ -524,17 +508,13 @@ void can_bus_get_status(can_bus_status_t *status) {
     *status = g_status;
     status->rec = (uint8_t)(g_debug_last_trec & 0xffu);
     status->tec = (uint8_t)((g_debug_last_trec >> 8) & 0xffu);
-    if (g_debug_last_trec == 0u) {
-      status->rec = (uint8_t)(g_debug_con_after_can20_req & 0xffu);
-      status->tec = (uint8_t)((g_debug_con_after_can20_req >> 8) & 0xffu);
-    }
-    status->error_count = g_debug_last_int;
-    status->rx_total = g_debug_last_fifocon1;
-    status->tx_total = g_debug_last_txqcon;
-    status->tx_attempt = g_debug_init_flags;
-    status->fwd_count = g_debug_int_low_count;
-    status->checksum_error_count = g_debug_init_flags;
-    status->overflow_count = g_debug_queue_flags;
+    status->rx_total = g_status.rx_total;
+    status->tx_total = g_status.tx_total;
+    status->tx_attempt = g_status.tx_attempt;
+    status->fwd_count = 0u;
+    status->checksum_error_count = 0u;
+    status->overflow_count = g_status.overflow_count;
+    status->error_count = g_status.error_count;
     status->bus_off = (g_debug_last_trec & MCP_TREC_TXBO_BITS) != 0u;
   }
 }
