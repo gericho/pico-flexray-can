@@ -1,3 +1,7 @@
+> Disclaimer:
+> The `main` branch is for the newer V2 board and is currently broken.
+> For the working Czok V1 FlexRay + CAN setup, use branch `Czok-V1-can`.
+
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/dynm/pico-flexray)
 
 ### pico-flexray-can
