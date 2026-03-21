@@ -356,10 +356,10 @@ int main(void)
                 {
                     stats.valid++;
 
-                    static uint8_t prev_cycle_for_clear = 0xFF;
-                    if (frame.cycle_count == 0 && prev_cycle_for_clear != 0)
-                        clear_frame_source_bitmaps();
-                    prev_cycle_for_clear = frame.cycle_count;
+                    static uint8_t prev_cycle_for_decay = 0xFF;
+                    if ((frame.cycle_count >> 4) != (prev_cycle_for_decay >> 4))
+                        decay_frame_source_counts();
+                    prev_cycle_for_decay = frame.cycle_count;
 
                     uint8_t demuxed = lookup_frame_source(frame.frame_id);
                     if (demuxed != FROM_UNKNOWN) {

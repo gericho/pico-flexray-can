@@ -81,33 +81,44 @@ static volatile uint32_t notify_dropped = 0;
 static volatile uint16_t current_frame_id = 0;
 static volatile uint8_t current_cycle_count = 0;
 
-// Bitmaps to record which frame IDs have been seen on FR3 vs FR4.
-// Used to demux FR1/FR2 streams: if a frame_id was seen on FR3, it belongs
-// to the FR3 channel; if on FR4, the FR4 channel.
-static volatile uint32_t fr3_seen_ids[64]; // 2048 bits (11-bit frame ID space)
-static volatile uint32_t fr4_seen_ids[64];
+// Saturating counters per frame ID for FR3/FR4 source identification.
+// A frame must be seen SOURCE_CONFIRM_THRESHOLD times before it is
+// considered confirmed on that channel.  Counters are periodically
+// decremented (decay) so stale/noisy entries time out naturally.
+#define SOURCE_CONFIRM_THRESHOLD 3
+#define SOURCE_COUNTER_MAX       6
 
-static inline void record_frame_id(volatile uint32_t *bitmap, uint16_t frame_id)
+static volatile uint8_t fr3_source_counts[2048];
+static volatile uint8_t fr4_source_counts[2048];
+
+static inline void record_frame_id(volatile uint8_t *counts, uint16_t frame_id)
 {
     if (frame_id >= 2048) return;
-    bitmap[frame_id >> 5] |= (1u << (frame_id & 0x1F));
+    uint8_t c = counts[frame_id];
+    if (c < SOURCE_COUNTER_MAX) counts[frame_id] = c + 1;
 }
 
 uint8_t lookup_frame_source(uint16_t frame_id)
 {
     if (frame_id >= 2048) return FROM_UNKNOWN;
-    uint32_t word = frame_id >> 5;
-    uint32_t bit = 1u << (frame_id & 0x1F);
-    uint8_t result = FROM_UNKNOWN;
-    if (fr3_seen_ids[word] & bit) result |= FROM_FR3;
-    if (fr4_seen_ids[word] & bit) result |= FROM_FR4;
-    return result;
+    bool fr3 = fr3_source_counts[frame_id] >= SOURCE_CONFIRM_THRESHOLD;
+    bool fr4 = fr4_source_counts[frame_id] >= SOURCE_CONFIRM_THRESHOLD;
+    if (fr3 == fr4) return FROM_UNKNOWN;
+    return fr3 ? FROM_FR3 : FROM_FR4;
 }
 
 void clear_frame_source_bitmaps(void)
 {
-    memset((void *)fr3_seen_ids, 0, sizeof(fr3_seen_ids));
-    memset((void *)fr4_seen_ids, 0, sizeof(fr4_seen_ids));
+    memset((void *)fr3_source_counts, 0, sizeof(fr3_source_counts));
+    memset((void *)fr4_source_counts, 0, sizeof(fr4_source_counts));
+}
+
+void decay_frame_source_counts(void)
+{
+    for (int i = 0; i < 2048; i++) {
+        if (fr3_source_counts[i] > 0) fr3_source_counts[i]--;
+        if (fr4_source_counts[i] > 0) fr4_source_counts[i]--;
+    }
 }
 
 void notify_queue_init(void)
@@ -233,7 +244,7 @@ void __time_critical_func(streamer_fr34_irq0_handler)(void)
         uint8_t h0 = fr3_ring_buffer[(start + 0) & FR3_RING_MASK];
         uint8_t h1 = fr3_ring_buffer[(start + 1) & FR3_RING_MASK];
         uint16_t fid = (uint16_t)(((uint16_t)(h0 & 0x07) << 8) | h1);
-        record_frame_id(fr3_seen_ids, fid);
+        record_frame_id(fr3_source_counts, fid);
         fr3_prev_write_idx = fr3_idx_now;
     }
 
@@ -242,7 +253,7 @@ void __time_critical_func(streamer_fr34_irq0_handler)(void)
         uint8_t h0 = fr4_ring_buffer[(start + 0) & FR4_RING_MASK];
         uint8_t h1 = fr4_ring_buffer[(start + 1) & FR4_RING_MASK];
         uint16_t fid = (uint16_t)(((uint16_t)(h0 & 0x07) << 8) | h1);
-        record_frame_id(fr4_seen_ids, fid);
+        record_frame_id(fr4_source_counts, fid);
         fr4_prev_write_idx = fr4_idx_now;
     }
 

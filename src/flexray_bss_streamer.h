@@ -50,8 +50,11 @@ void setup_stream_fr34(PIO pio,
 // bitmaps populated by the FR3/FR4 ISR. Returns FROM_FR3, FROM_FR4, or FROM_UNKNOWN.
 uint8_t lookup_frame_source(uint16_t frame_id);
 
-// Clear FR3/FR4 seen-ID bitmaps so stale entries are pruned.
+// Clear FR3/FR4 source counters (hard reset).
 void clear_frame_source_bitmaps(void);
+
+// Decrement all FR3/FR4 source counters by 1 (gradual timeout).
+void decay_frame_source_counts(void);
 
 // --- Cross-core notification ring (single producer on core1 ISR, single consumer on core0) ---
 // Encoded format: [31]=is_fr2, [30]=bus(0=FR12,1=FR34), [29:12]=seq(18 bits), [11:0]=ring index
