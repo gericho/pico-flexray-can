@@ -41,8 +41,8 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_offset = 0,
 		.e2e_len = 15,
 		.e2e_init_value = 0xd6,
-		.replace_offset = 3,
-		.replace_len = 4,
+		.replace_offset = 0,
+		.replace_len = 9,
 		.direction = INJECT_DIRECTION_TO_ECU,
 	},
 	{
@@ -54,8 +54,8 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_offset = 0,
 		.e2e_len = 15,
 		.e2e_init_value = 0xd6,
-		.replace_offset = 3,
-		.replace_len = 4,
+		.replace_offset = 0,
+		.replace_len = 9,
 		.direction = INJECT_DIRECTION_TO_ECU,
 	},
 	{
@@ -89,4 +89,3 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 #define NUM_TRIGGER_RULES (sizeof(INJECT_TRIGGERS)/sizeof(INJECT_TRIGGERS[0]))
 
 #endif // FLEXRAY_INJECTOR_RULES_H
-
