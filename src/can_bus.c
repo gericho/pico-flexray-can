@@ -37,6 +37,9 @@
 #define MCP_REG_C1FLTOBJ0 0x1F0u
 #define MCP_REG_C1MASK0 0x1F4u
 
+#define MCP_RAM_START 0x400u
+#define MCP_RAM_END   0xC00u
+
 #define MCP_CON_REQOP_SHIFT 24u
 #define MCP_CON_OPMOD_SHIFT 21u
 #define MCP_CON_TXQEN_BITS (1u << 20)
@@ -74,6 +77,11 @@ static uint32_t can_error_count;
 static bool can_started;
 static bool can_io_initialized;
 static uint32_t tx_sequence;
+static uint32_t can_debug_c1con;
+static uint32_t can_debug_c1txqcon;
+static uint32_t can_debug_c1txqsta;
+static uint32_t can_debug_c1txqua;
+static uint8_t can_send_fail_reason;
 
 static inline void can_spi_delay(void)
 {
@@ -164,12 +172,25 @@ static void mcp_write32(uint16_t addr, uint32_t value)
     mcp_write_bytes(addr, raw, sizeof(raw));
 }
 
+static void mcp_write8(uint16_t addr, uint8_t value)
+{
+    mcp_write_bytes(addr, &value, 1u);
+}
+
 static void mcp_update_bits(uint16_t addr, uint32_t mask, uint32_t value)
 {
     uint32_t reg = mcp_read32(addr);
     reg &= ~mask;
     reg |= value & mask;
     mcp_write32(addr, reg);
+}
+
+static void mcp_zero_message_ram(void)
+{
+    static const uint8_t zeros[16] = {0};
+    for (uint16_t addr = MCP_RAM_START; addr < MCP_RAM_END; addr += sizeof(zeros)) {
+        mcp_write_bytes(addr, zeros, sizeof(zeros));
+    }
 }
 
 static bool mcp_wait_mode(uint8_t mode, uint32_t timeout_ms)
@@ -216,10 +237,10 @@ static void mcp_configure_timing_500k(void)
         (7u << 8) |
         7u;
     const uint32_t dbtcfg =
-        (1u << 24) |
-        (30u << 16) |
-        (7u << 8) |
-        7u;
+        (15u << 24) |
+        (15u << 16) |
+        (15u << 8) |
+        0u;
 
     mcp_write32(MCP_REG_C1NBTCFG, nbtcfg);
     mcp_write32(MCP_REG_C1DBTCFG, dbtcfg);
@@ -235,6 +256,7 @@ static bool mcp_init_controller(void)
     }
 
     mcp_write32(MCP_REG_C1CON, ((uint32_t)MCP_MODE_CONFIG << MCP_CON_REQOP_SHIFT) | MCP_CON_TXQEN_BITS);
+    mcp_zero_message_ram();
     mcp_configure_timing_500k();
 
     mcp_write32(MCP_REG_C1TEFCON, 0u);
@@ -244,8 +266,8 @@ static bool mcp_init_controller(void)
         MCP_REG_C1TXQCON,
         (0u << 29) |
         (0u << 24) |
-        (2u << 21) |
-        (31u << 16) |
+        (0u << 21) |
+        (0u << 16) |
         MCP_FIFO_FRESET_BITS |
         MCP_FIFO_TXEN_BITS
     );
@@ -253,7 +275,7 @@ static bool mcp_init_controller(void)
     mcp_write32(
         MCP_REG_C1FIFOCON1,
         (0u << 29) |
-        (7u << 24) |
+        (0u << 24) |
         MCP_FIFO_FRESET_BITS |
         MCP_FIFO_RXTSEN_BITS
     );
@@ -352,6 +374,11 @@ void can_bus_init(void)
     can_overflow_count = 0u;
     can_error_count = 0u;
     tx_sequence = 0u;
+    can_debug_c1con = 0u;
+    can_debug_c1txqcon = 0u;
+    can_debug_c1txqsta = 0u;
+    can_debug_c1txqua = 0u;
+    can_send_fail_reason = 0u;
 
     can_started = false;
     printf("CAN V1 idle until bitrate is configured over USB\n");
@@ -366,7 +393,7 @@ void can_bus_poll(void)
     uint32_t processed = 0u;
     const uint32_t max_frames_per_poll = 4u;
 
-    while (!gpio_get(CAN_INT_PIN) && processed < max_frames_per_poll) {
+    while (processed < max_frames_per_poll) {
         uint32_t fifo_status = mcp_read32(MCP_REG_C1FIFOSTA1);
         if ((fifo_status & MCP_FIFO_TFNRFNIF_BITS) == 0u) {
             break;
@@ -374,9 +401,9 @@ void can_bus_poll(void)
 
         uint32_t fifo_ua = mcp_read32(MCP_REG_C1FIFOUA1);
         uint8_t obj[20];
-        mcp_read_bytes((uint16_t)(fifo_ua & 0x0fffu), obj, sizeof(obj));
+        mcp_read_bytes((uint16_t)((MCP_RAM_START + fifo_ua) & 0x0fffu), obj, sizeof(obj));
         can_handle_rx_object(obj);
-        mcp_update_bits(MCP_REG_C1FIFOCON1, MCP_FIFO_UINC_BITS, MCP_FIFO_UINC_BITS);
+        mcp_write8(MCP_REG_C1FIFOCON1 + 1u, 1u);
         processed++;
     }
 }
@@ -391,6 +418,11 @@ void can_bus_reset(void)
     can_overflow_count = 0u;
     can_error_count = 0u;
     tx_sequence = 0u;
+    can_debug_c1con = 0u;
+    can_debug_c1txqcon = 0u;
+    can_debug_c1txqsta = 0u;
+    can_debug_c1txqua = 0u;
+    can_send_fail_reason = 0u;
 
     if (can_started) {
         can_started = mcp_init_controller();
@@ -439,15 +471,28 @@ bool can_bus_pop_frame(can_bus_frame_t *frame)
 
 bool can_bus_send_frame(const can_bus_frame_t *frame)
 {
-    if (!can_started || !frame || frame->dlc > 8u) {
+    can_debug_c1con = mcp_read32(MCP_REG_C1CON);
+    can_debug_c1txqcon = mcp_read32(MCP_REG_C1TXQCON);
+    can_debug_c1txqsta = mcp_read32(MCP_REG_C1TXQSTA);
+    can_debug_c1txqua = mcp_read32(MCP_REG_C1TXQUA);
+    can_send_fail_reason = 0u;
+
+    if (!can_started) {
+        can_send_fail_reason = 1u;
         return false;
     }
-
-    uint32_t txq_status = mcp_read32(MCP_REG_C1TXQSTA);
-    if ((txq_status & MCP_FIFO_TXQNIF_BITS) == 0u) {
+    if (!frame) {
+        can_send_fail_reason = 2u;
         return false;
     }
-
+    if (frame->dlc > 8u) {
+        can_send_fail_reason = 3u;
+        return false;
+    }
+    if (((can_debug_c1con >> MCP_CON_OPMOD_SHIFT) & 0x7u) != MCP_MODE_CAN20) {
+        can_send_fail_reason = 4u;
+        return false;
+    }
     uint32_t txq_ua = mcp_read32(MCP_REG_C1TXQUA);
     uint8_t obj[16] = {0};
     uint32_t t0;
@@ -479,9 +524,8 @@ bool can_bus_send_frame(const can_bus_frame_t *frame)
         memcpy(&obj[8], frame->data, frame->dlc);
     }
 
-    mcp_write_bytes((uint16_t)(txq_ua & 0x0fffu), obj, sizeof(obj));
-    mcp_update_bits(MCP_REG_C1TXQCON, MCP_FIFO_UINC_BITS | MCP_FIFO_TXREQ_BITS,
-                    MCP_FIFO_UINC_BITS | MCP_FIFO_TXREQ_BITS);
+    mcp_write_bytes((uint16_t)((MCP_RAM_START + txq_ua) & 0x0fffu), obj, sizeof(obj));
+    mcp_write8(MCP_REG_C1TXQCON + 1u, (uint8_t)((MCP_FIFO_UINC_BITS | MCP_FIFO_TXREQ_BITS) >> 8));
 
     can_tx_attempt++;
     can_tx_total++;
@@ -502,6 +546,11 @@ void can_bus_get_status(can_bus_status_t *status)
     status->tx_attempt = can_tx_attempt;
     status->overflow_count = can_overflow_count;
     status->error_count = can_error_count;
+    status->debug_c1con = can_debug_c1con;
+    status->debug_c1txqcon = can_debug_c1txqcon;
+    status->debug_c1txqsta = can_debug_c1txqsta;
+    status->debug_c1txqua = can_debug_c1txqua;
+    status->send_fail_reason = can_send_fail_reason;
 
     if (can_started) {
         uint32_t trec = mcp_read32(MCP_REG_C1TREC);

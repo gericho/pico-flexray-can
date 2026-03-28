@@ -27,9 +27,9 @@ project(pico_flexray C CXX ASM)
 pico_sdk_init()
 
 option(LINK_PICO_CAN_STUB "Link minimal CAN stub object" OFF)
-set(PICO_CAN_STUB_SRC)
+set(PICO_CAN_SRC src/can_bus.c)
 if(LINK_PICO_CAN_STUB)
-  set(PICO_CAN_STUB_SRC src/can_bus_stub.c)
+  set(PICO_CAN_SRC src/can_bus_stub.c)
 endif()
 
 add_executable(pico_flexray
@@ -41,7 +41,7 @@ add_executable(pico_flexray
      src/flexray_bss_streamer.c
      src/flexray_fowarder_with_injector.c
      src/flexray_fifo.c
-     ${PICO_CAN_STUB_SRC}
+     ${PICO_CAN_SRC}
      )
 
 pico_set_program_name(pico_flexray "pico_flexray")

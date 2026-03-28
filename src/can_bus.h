@@ -23,6 +23,11 @@ typedef struct {
     uint32_t error_count;
     uint32_t fwd_count;
     uint32_t checksum_error_count;
+    uint32_t debug_c1con;
+    uint32_t debug_c1txqcon;
+    uint32_t debug_c1txqsta;
+    uint32_t debug_c1txqua;
+    uint8_t send_fail_reason;
     uint8_t rec;
     uint8_t tec;
     bool bus_off;

@@ -12,6 +12,9 @@
 
 // Add near top after includes
 static absolute_time_t last_usb_activity = 0;
+static uint32_t host_can_rx_total = 0;
+static uint32_t host_can_rx_parse_fail = 0;
+static uint32_t host_can_tx_fail = 0;
 
 // FlexRay FIFO
 static flexray_fifo_t flexray_fifo;
@@ -35,6 +38,23 @@ static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *r
 static bool handle_control_data_stage(tusb_control_request_t const *request, uint8_t const *data, uint16_t len);
 static bool try_send_from_fifo(const char *context);
 static bool try_send_can_from_ring(void);
+static uint8_t calculate_can_checksum(const uint8_t *data, uint32_t len);
+static void handle_can_out_payload(const uint8_t *data, uint16_t len);
+
+typedef struct __attribute__((packed)) {
+    uint8_t reserved : 1;
+    uint8_t bus : 3;
+    uint8_t data_len_code : 4;
+    uint8_t rejected : 1;
+    uint8_t returned : 1;
+    uint8_t extended : 1;
+    uint32_t addr : 29;
+    uint8_t checksum;
+} host_can_header_t;
+
+static const uint8_t dlc_to_len[] = {
+    0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 12u, 16u, 20u, 24u, 32u, 48u, 64u
+};
 // ------------------------------------------------------------
 // Vendor OUT protocol (host -> device)
 //  op 0x90: Push override replacement slice
@@ -74,6 +94,45 @@ static void handle_vendor_out_payload(const uint8_t *data, uint16_t len)
             // Unknown op: stop parsing this buffer
             break;
         }
+    }
+}
+
+static void handle_can_out_payload(const uint8_t *data, uint16_t len)
+{
+    uint32_t pos = 0u;
+
+    while (pos + sizeof(host_can_header_t) <= len) {
+        host_can_header_t header;
+        memcpy(&header, &data[pos], sizeof(header));
+
+        uint8_t payload_len = dlc_to_len[header.data_len_code & 0x0Fu];
+        if (payload_len > 8u) {
+            host_can_rx_parse_fail++;
+            break;
+        }
+        if (pos + sizeof(header) + payload_len > len) {
+            host_can_rx_parse_fail++;
+            break;
+        }
+        if (calculate_can_checksum(&data[pos], (uint32_t)sizeof(header) + payload_len) != 0u) {
+            host_can_rx_parse_fail++;
+            break;
+        }
+        host_can_rx_total++;
+
+        can_bus_frame_t frame = {0};
+        frame.id = header.addr;
+        frame.dlc = payload_len;
+        frame.extended = header.extended != 0u;
+        frame.rtr = false;
+        frame.timestamp_us = time_us_32();
+        if (payload_len > 0u) {
+            memcpy(frame.data, &data[pos + sizeof(header)], payload_len);
+        }
+        if (!can_bus_send_frame(&frame)) {
+            host_can_tx_fail++;
+        }
+        pos += (uint32_t)sizeof(header) + payload_len;
     }
 }
 
@@ -209,19 +268,31 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
             memset(can_health, 0, sizeof(*can_health));
             can_bus_get_status(&can_status);
             can_health->bus_off = can_status.bus_off ? 1u : 0u;
+            can_health->bus_off_cnt = host_can_rx_total;
+            can_health->error_warning = can_status.started ? 1u : 0u;
+            can_health->error_passive = can_status.send_fail_reason;
+            can_health->last_error = (uint8_t)((can_status.debug_c1con >> 21) & 0x7u);
+            can_health->last_stored_error = (uint8_t)((can_status.debug_c1con >> 24) & 0x7u);
+            can_health->last_data_error = (uint8_t)(can_status.debug_c1txqcon & 0xffu);
+            can_health->last_data_stored_error = (uint8_t)(can_status.debug_c1txqsta & 0xffu);
             can_health->receive_error_cnt = can_status.rec;
             can_health->transmit_error_cnt = can_status.tec;
             can_health->total_error_cnt = can_status.error_count;
-            can_health->total_tx_lost_cnt = can_status.checksum_error_count;
+            can_health->total_tx_lost_cnt = can_status.checksum_error_count + host_can_rx_parse_fail;
             can_health->total_tx_cnt = can_status.tx_total;
             can_health->total_rx_cnt = can_status.rx_total;
             can_health->total_rx_lost_cnt = can_status.overflow_count;
             can_health->total_fwd_cnt = can_status.fwd_count;
+            can_health->total_tx_checksum_error_cnt = host_can_tx_fail;
             can_health->can_speed = can_status.started ? (uint16_t)(can_status.bitrate / 1000u) : 0u;
             can_health->can_data_speed = can_health->can_speed;
             can_health->canfd_enabled = 0;
             can_health->brs_enabled = 0;
             can_health->canfd_non_iso = 0;
+            can_health->irq0_call_rate = can_status.debug_c1con;
+            can_health->irq1_call_rate = can_status.debug_c1txqcon;
+            can_health->irq2_call_rate = can_status.debug_c1txqsta;
+            can_health->can_core_reset_cnt = can_status.debug_c1txqua;
             response_len = sizeof(struct can_health_t);
         }
         break;
@@ -532,7 +603,19 @@ void tud_resume_cb(void)
 // Invoked when received data from host via OUT endpoint
 void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 {
-    (void)itf;
+    if (itf == 1u) {
+        if (bufsize > 0) {
+            handle_can_out_payload(buffer, bufsize);
+        }
+        while (tud_vendor_n_available(itf)) {
+            uint8_t tmp[256];
+            uint32_t n = tud_vendor_n_read(itf, tmp, sizeof(tmp));
+            if (n == 0u) break;
+            handle_can_out_payload(tmp, (uint16_t)n);
+        }
+        last_usb_activity = get_absolute_time();
+        return;
+    }
     if (itf != 0u) {
         while (tud_vendor_n_available(itf)) {
             uint8_t tmp[64];
