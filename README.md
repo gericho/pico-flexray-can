@@ -36,8 +36,9 @@ Current state:
 Firmware for the Czok V1 board (`pico2_w`) with:
 
 - single-channel FlexRay MITM forwarding for BMW i3 reverse engineering
-- MCP2518FD-based classical CAN RX on `CN13`
+- MCP2518FD-based classical CAN on `CN13`
 - USB streaming for both FlexRay and CAN
+- USB host->CAN injection support for controlled replay/debug
 
 This repo is the working V1 branch, not a generic multi-board firmware.
 
@@ -49,15 +50,18 @@ What works:
 - FlexRay USB streaming is stable
 - MCP2518FD bring-up is stable at `500 kbps`
 - CAN RX from the external bus is working
-- CAN is exported over a second USB endpoint and can be logged by a patched `pandad`
+- CAN TX from the host to the external bus is working
+- CAN is exported over a second USB interface/endpoint pair and can be logged by a patched `pandad`
+- host tools can replay CAN and FlexRay in parallel through the same Pico device
 
 Current limitation:
 
 - FlexRay forwarding is single-channel only for now
+- the vehicle-side acceptance gate for BMW i3 lateral replay is still under investigation
+- replaying valid raw frames is not yet sufficient, by itself, to guarantee real steering response on the vehicle
 
 What is intentionally not implemented:
 
-- CAN TX to the vehicle bus
 - generic CAN-FD support
 - a stock upstream host stack without `pandad` changes
 
@@ -117,6 +121,19 @@ The firmware enumerates as one USB device with two vendor IN streams:
 - `0x81`: FlexRay stream
 - `0x82`: Panda-style CAN packet stream
 
+The CAN path also exposes a host->device vendor OUT endpoint:
+
+- `0x04`: Panda-style CAN packet write endpoint
+
+Practical meaning:
+
+- FlexRay host transport remains on interface `0`
+- CAN host transport uses interface `1`
+- the same Pico can now be used for:
+  - FlexRay streaming
+  - CAN logging
+  - host-driven CAN replay/injection
+
 The firmware also supports software entry into BOOTSEL through the Panda vendor request:
 
 - `PANDA_ENTER_BOOTLOADER_MODE = 0xD1`
@@ -143,12 +160,24 @@ Without that host-side patch, CAN RX will work in the firmware but will not appe
 
 ## Key Firmware Notes
 
-The final CAN RX fix was not in the bring-up itself, but in the MCP2518FD RX handling:
+The current working CAN path depends on linking the real MCP2518FD driver, not the old stub:
+
+- normal builds must use `src/can_bus.c`
+- `LINK_PICO_CAN_STUB=OFF` is the expected setting for the V1 CAN firmware
+
+Important MCP2518FD RX handling details:
 
 - read the RX object from `0x400 + FIFOUA`
 - advance the RX FIFO with an `8-bit` write to `C1FIFOCON1 + 1`
+- poll RX FIFO state directly, rather than relying only on the interrupt pin level
 
-This is the change that turned the CAN USB stream from malformed/repeated frames into valid Panda-style CAN packets.
+Important MCP2518FD TX handling details:
+
+- write TX objects into message RAM at `0x400 + TXQUA`
+- trigger TX with an `8-bit` write to `C1TXQCON + 1`
+- keep the controller in classic CAN mode (`CAN20`) for the BMW i3 PT-CAN path
+
+These changes are what turned the V1 CAN path into a real bidirectional USB<->CAN transport instead of a partial RX-only bring-up.
 
 ## Build
 
@@ -185,6 +214,7 @@ Firmware-only checks:
 - `GET_CAN_HEALTH_STATS` should show:
   - `canSpeed = 500`
   - `totalRxCnt > 0`
+  - `totalTxCnt > 0` after a host-driven CAN transmit test
 
 End-to-end host checks:
 
@@ -192,12 +222,22 @@ End-to-end host checks:
   - `src 0` and `src 1` for FlexRay
   - `src 2` for CAN
 
+Direct host transport checks:
+
+- host CAN RX probe should show:
+  - live reads on endpoint `0x82`
+  - `totalRxCnt` increasing
+- host CAN TX probe should show:
+  - `totalTxCnt` increasing
+  - `txFail = 0` in the exposed debug counters
+
 ## Branch Notes
 
 Important recent commits:
 
 - `e963a99` `Stabilize MCP2518FD CAN RX bring-up`
 - `13cb6bd` `Fix MCP2518FD RX object address and FIFO advance`
+- `b5e8929` `can: wire real MCP2518 driver and USB host transport`
 
 ## Credits
 
