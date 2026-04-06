@@ -33,6 +33,8 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
 static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *request);
 static bool handle_control_data_stage(tusb_control_request_t const *request, uint8_t const *data, uint16_t len);
 static bool try_send_from_fifo(const char *context);
+
+#define PICO_REQ_GET_INJECTOR_DIAG 0xDA
 // ------------------------------------------------------------
 // Vendor OUT protocol (host -> device)
 //  op 0x90: Push override replacement slice
@@ -251,6 +253,18 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
         response_len = sizeof(struct health_t);
         memcpy(response_data, health, response_len);
         // printf("Control Read: GET_HEALTH_PACKET\n");
+        break;
+
+    case PICO_REQ_GET_INJECTOR_DIAG:
+        {
+            injector_diag_t diag = {0};
+            injector_get_diag(&diag);
+            response_len = sizeof(diag);
+            if (response_len > sizeof(response_data)) {
+                response_len = sizeof(response_data);
+            }
+            memcpy(response_data, &diag, response_len);
+        }
         break;
 
     case PANDA_GET_SIGNATURE_PART1:

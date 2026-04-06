@@ -5,6 +5,20 @@
 #include <stdbool.h>
 #include "hardware/pio.h"
 
+typedef struct {
+    uint32_t override_submit_count;
+    uint32_t override_submit_accept_count;
+    uint32_t target72_cache_count;
+    uint32_t trigger60_cycle_match_count;
+    uint32_t override72_pop_hit_count;
+    uint32_t inject_fire_count;
+    uint16_t last_target_id;
+    uint8_t last_cycle_count;
+    uint8_t last_direction;
+    uint8_t last_replace_len;
+    uint8_t injector_enabled;
+} injector_diag_t;
+
 // Cache a frame's raw bytes (header+payload+CRC) when rules match
 void try_cache_last_target_frame(uint16_t frame_id, uint8_t cycle_count, uint16_t frame_length, uint8_t *captured_bytes);
 
@@ -23,8 +37,8 @@ bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uin
 // Enable/disable injection at runtime
 void injector_set_enabled(bool enabled);
 bool injector_is_enabled(void);
+void injector_get_diag(injector_diag_t *out);
 
 
 #endif // FLEXRAY_FORWARDER_WITH_INJECTOR_H
-
 
