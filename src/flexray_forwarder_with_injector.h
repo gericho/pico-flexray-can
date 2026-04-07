@@ -8,9 +8,9 @@
 typedef struct {
     uint32_t override_submit_count;
     uint32_t override_submit_accept_count;
-    uint32_t target72_cache_count;
+    uint32_t target96_cache_count;
     uint32_t trigger60_cycle_match_count;
-    uint32_t override72_pop_hit_count;
+    uint32_t override96_pop_hit_count;
     uint32_t inject_fire_count;
     uint16_t last_target_id;
     uint8_t last_cycle_count;
@@ -41,4 +41,3 @@ void injector_get_diag(injector_diag_t *out);
 
 
 #endif // FLEXRAY_FORWARDER_WITH_INJECTOR_H
-

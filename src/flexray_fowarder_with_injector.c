@@ -114,8 +114,8 @@ void try_cache_last_target_frame(uint16_t frame_id, uint8_t cycle_count, uint16_
     memcpy(TEMPLATES[slot].data, captured_bytes, frame_len);
     TEMPLATES[slot].len = (uint16_t)frame_len;
     TEMPLATES[slot].valid = 1;
-    if (rule->target_id == 0x48 || rule->target_id == 0x60) {
-        injector_diag.target72_cache_count++;
+    if (rule->target_id == 0x60) {
+        injector_diag.target96_cache_count++;
     }
 }
 
@@ -170,7 +170,7 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if ((uint8_t)(cycle_count & INJECT_TRIGGERS[i].cycle_mask) != INJECT_TRIGGERS[i].cycle_base){
             continue;
         }
-        if (INJECT_TRIGGERS[i].trigger_id == 0x3c && (INJECT_TRIGGERS[i].target_id == 0x48 || INJECT_TRIGGERS[i].target_id == 0x60)) {
+        if (INJECT_TRIGGERS[i].trigger_id == 0x3c && INJECT_TRIGGERS[i].target_id == 0x60) {
             injector_diag.trigger60_cycle_match_count++;
         }
 
@@ -189,8 +189,8 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if (!has_data) {
             continue;
         }
-        if (INJECT_TRIGGERS[i].target_id == 0x48 || INJECT_TRIGGERS[i].target_id == 0x60) {
-            injector_diag.override72_pop_hit_count++;
+        if (INJECT_TRIGGERS[i].target_id == 0x60) {
+            injector_diag.override96_pop_hit_count++;
         }
 
         memcpy(tpl_payload+INJECT_TRIGGERS[i].replace_offset, replace_bytes, INJECT_TRIGGERS[i].replace_len);
@@ -265,7 +265,7 @@ bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uin
         return false;
     }
     uint8_t phase = bytes[1];
-    uint8_t phase_valid = matched_rule->target_id == 0x48 ? 1 : 0;
+    uint8_t phase_valid = 0;
     len = len - 1 - matched_rule->replace_offset;
 
     if (len != matched_rule->replace_len) {
