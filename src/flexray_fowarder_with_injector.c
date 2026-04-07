@@ -114,7 +114,7 @@ void try_cache_last_target_frame(uint16_t frame_id, uint8_t cycle_count, uint16_
     memcpy(TEMPLATES[slot].data, captured_bytes, frame_len);
     TEMPLATES[slot].len = (uint16_t)frame_len;
     TEMPLATES[slot].valid = 1;
-    if (rule->target_id == 0x48) {
+    if (rule->target_id == 0x48 || rule->target_id == 0x60) {
         injector_diag.target72_cache_count++;
     }
 }
@@ -170,7 +170,7 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if ((uint8_t)(cycle_count & INJECT_TRIGGERS[i].cycle_mask) != INJECT_TRIGGERS[i].cycle_base){
             continue;
         }
-        if (INJECT_TRIGGERS[i].trigger_id == 0x3c && INJECT_TRIGGERS[i].target_id == 0x48) {
+        if (INJECT_TRIGGERS[i].trigger_id == 0x3c && (INJECT_TRIGGERS[i].target_id == 0x48 || INJECT_TRIGGERS[i].target_id == 0x60)) {
             injector_diag.trigger60_cycle_match_count++;
         }
 
@@ -189,13 +189,15 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if (!has_data) {
             continue;
         }
-        if (INJECT_TRIGGERS[i].target_id == 0x48) {
+        if (INJECT_TRIGGERS[i].target_id == 0x48 || INJECT_TRIGGERS[i].target_id == 0x60) {
             injector_diag.override72_pop_hit_count++;
         }
 
         memcpy(tpl_payload+INJECT_TRIGGERS[i].replace_offset, replace_bytes, INJECT_TRIGGERS[i].replace_len);
-    
-        fix_e2e_payload(tpl_payload+INJECT_TRIGGERS[i].e2e_offset, INJECT_TRIGGERS[i].e2e_init_value, INJECT_TRIGGERS[i].e2e_len);
+
+        if (INJECT_TRIGGERS[i].e2e_len > 0) {
+            fix_e2e_payload(tpl_payload+INJECT_TRIGGERS[i].e2e_offset, INJECT_TRIGGERS[i].e2e_init_value, INJECT_TRIGGERS[i].e2e_len);
+        }
         fix_cycle_count(tpl->data, cycle_count);
         fix_flexray_frame_crc(tpl->data, tpl->len);
         injector_diag.inject_fire_count++;

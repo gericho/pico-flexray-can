@@ -19,18 +19,18 @@ typedef struct {
 } trigger_rule_t;
 
 static const trigger_rule_t INJECT_TRIGGERS[] = {
-	// BMW i3 SAS-side lateral path is triggered by 0x3c and injects 0x48
-	// towards the vehicle/BDC side of the MITM.
+	// BMW i3 SAS-side lateral path uses 0x3c as the burst trigger.
+	// The active TX draft now patches frame 0x60 (96 dec) directly.
 	{
 		.trigger_id = 0x3c,
-		.target_id = 0x48,
+		.target_id = 0x60,
 		.cycle_mask = 0b11,
 		.cycle_base = 1,
 		.e2e_offset = 0,
-		.e2e_len = 15,
+		.e2e_len = 0,
 		.e2e_init_value = 0xd6,
-		.replace_offset = 2,
-		.replace_len = 14,
+		.replace_offset = 0,
+		.replace_len = 9,
 		.direction = INJECT_DIRECTION_TO_VEHICLE,
 	},
 };
@@ -38,4 +38,3 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 #define NUM_TRIGGER_RULES (sizeof(INJECT_TRIGGERS)/sizeof(INJECT_TRIGGERS[0]))
 
 #endif // FLEXRAY_INJECTOR_RULES_H
-
