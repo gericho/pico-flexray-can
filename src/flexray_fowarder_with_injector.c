@@ -160,7 +160,7 @@ static void inject_frame(uint8_t *full_frame, uint16_t injector_payload_length, 
 
     pio_sm_put(pio_forwarder_with_injector, sm, injector_payload_length - 1);
     dma_channel_set_read_addr((uint)dma_chan, (const void *)full_frame, false);
-    dma_channel_set_trans_count((uint)dma_chan, injector_payload_length / 4, true);
+    dma_channel_set_trans_count((uint)dma_chan, (injector_payload_length + 3) / 4, true);
 }
 
 // flexray_frame_t dummy_frame;
