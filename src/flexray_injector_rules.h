@@ -18,6 +18,7 @@ typedef struct {
 	uint8_t replace_offset;
 	uint8_t replace_len;
 	uint8_t direction;
+	uint8_t raw_override;
 } trigger_rule_t;
 
 static const trigger_rule_t INJECT_TRIGGERS[] = {
@@ -32,12 +33,24 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_init_value = 0xd6,
 		.replace_offset = 2,
 		.replace_len = 14,
-		.direction = INJECT_DIRECTION_TO_FR1,
+		.direction = INJECT_DIRECTION_TO_FR3,
+		.raw_override = 0,
+	},
+	{
+		.trigger_id = 0x42,
+		.target_id = 0x44,
+		.cycle_mask = 0b01,
+		.cycle_base = 0,
+		.e2e_offset = 0,
+		.e2e_len = 0,
+		.e2e_init_value = 0,
+		.replace_offset = 0,
+		.replace_len = 16,
+		.direction = INJECT_DIRECTION_TO_FR3,
+		.raw_override = 1,
 	},
 };
 
 #define NUM_TRIGGER_RULES (sizeof(INJECT_TRIGGERS)/sizeof(INJECT_TRIGGERS[0]))
 
 #endif // FLEXRAY_INJECTOR_RULES_H
-
-

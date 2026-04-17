@@ -201,7 +201,9 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
 
         memcpy(tpl_payload+INJECT_TRIGGERS[i].replace_offset, replace_bytes, INJECT_TRIGGERS[i].replace_len);
     
-        fix_e2e_payload(tpl_payload+INJECT_TRIGGERS[i].e2e_offset, INJECT_TRIGGERS[i].e2e_init_value, INJECT_TRIGGERS[i].e2e_len);
+        if (!INJECT_TRIGGERS[i].raw_override) {
+            fix_e2e_payload(tpl_payload+INJECT_TRIGGERS[i].e2e_offset, INJECT_TRIGGERS[i].e2e_init_value, INJECT_TRIGGERS[i].e2e_len);
+        }
         fix_cycle_count(tpl->data, cycle_count);
         fix_flexray_frame_crc(tpl->data, tpl->len);
         inject_frame(tpl->data, tpl->len, INJECT_TRIGGERS[i].direction);
@@ -237,19 +239,13 @@ static void setup_dma(void){
 
 bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uint8_t *bytes)
 {
-    // Host should provide only the replacement slice, not a full frame.
-    // Match the provided id/base against a trigger rule's target_id/cycle_base
-    // and enforce len == rule->replace_len. We use the rule's cycle_mask/cycle_base.
+    // Host provides one leading cycle/check byte plus the payload bytes covered by
+    // replace_offset + replace_len. Raw rules expect application CRCs precomputed.
     if (bytes == NULL) {
         return false;
     }
 
     if (len < 1 || len > MAX_FRAME_PAYLOAD_BYTES+1) {
-        return false;
-    }
-
-    uint8_t crc = calculate_autosar_e2e_crc8(bytes+1, 0xf1, len-1);
-    if (crc != bytes[0]) {
         return false;
     }
 
@@ -263,9 +259,19 @@ bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uin
     if (matched_rule == NULL) {
         return false;
     }
-    len = len - 1 - matched_rule->replace_offset;
 
-    if (len != matched_rule->replace_len) {
+    if (matched_rule->raw_override) {
+        if ((uint8_t)(bytes[0] & matched_rule->cycle_mask) != matched_rule->cycle_base) {
+            return false;
+        }
+    } else {
+        uint8_t crc = calculate_autosar_e2e_crc8(bytes+1, 0xf1, len-1);
+        if (crc != bytes[0]) {
+            return false;
+        }
+    }
+    uint16_t payload_len = (uint16_t)(len - 1u);
+    if (payload_len != (uint16_t)(matched_rule->replace_offset + matched_rule->replace_len)) {
         return false;
     }
     // bytes+1: skip the first byte, which is the cycle count
