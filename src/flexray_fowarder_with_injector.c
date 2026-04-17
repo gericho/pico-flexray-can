@@ -50,9 +50,11 @@ static volatile uint32_t host_override_head = 0;
 static volatile uint32_t host_override_tail = 0;
 static host_override_t host_overrides[HOST_OVERRIDE_CAP];
 static volatile bool injector_enabled = true;
+static injector_diag_t injector_diag = {0};
 
 static inline bool host_override_push(uint16_t id, uint8_t mask, uint8_t base, uint16_t len, const uint8_t *bytes)
 {
+    injector_diag.override_submit_count++;
     uint32_t next_head = (host_override_head + 1u) % HOST_OVERRIDE_CAP;
     if (next_head == host_override_tail) {
         // drop oldest on overflow
@@ -67,6 +69,7 @@ static inline bool host_override_push(uint16_t id, uint8_t mask, uint8_t base, u
     memcpy(slot->data, bytes, len);
     __atomic_store_n(&slot->valid, 1, __ATOMIC_RELEASE);
     host_override_head = next_head;
+    injector_diag.override_submit_accept_count++;
     return true;
 }
 
@@ -113,6 +116,7 @@ void try_cache_last_target_frame(uint16_t frame_id, uint8_t cycle_count, uint16_
     memcpy(TEMPLATES[slot].data, captured_bytes, frame_len);
     TEMPLATES[slot].len = (uint16_t)frame_len;
     TEMPLATES[slot].valid = 1;
+    injector_diag.target96_cache_count++;
 }
 
 static void fix_cycle_count(uint8_t *full_frame, uint8_t cycle_count)
@@ -176,6 +180,7 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if ((uint8_t)(cycle_count & INJECT_TRIGGERS[i].cycle_mask) != INJECT_TRIGGERS[i].cycle_base){
             continue;
         }
+        injector_diag.trigger60_cycle_match_count++;
 
         int target_slot = find_cache_slot_for_id(INJECT_TRIGGERS[i].target_id, cycle_count);
         if (target_slot < 0){
@@ -192,6 +197,7 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if (!has_data) {
             continue;
         }
+        injector_diag.override96_pop_hit_count++;
 
         memcpy(tpl_payload+INJECT_TRIGGERS[i].replace_offset, replace_bytes, INJECT_TRIGGERS[i].replace_len);
     
@@ -199,6 +205,11 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         fix_cycle_count(tpl->data, cycle_count);
         fix_flexray_frame_crc(tpl->data, tpl->len);
         inject_frame(tpl->data, tpl->len, INJECT_TRIGGERS[i].direction);
+        injector_diag.inject_fire_count++;
+        injector_diag.last_target_id = INJECT_TRIGGERS[i].target_id;
+        injector_diag.last_cycle_count = cycle_count;
+        injector_diag.last_direction = INJECT_TRIGGERS[i].direction;
+        injector_diag.last_replace_len = INJECT_TRIGGERS[i].replace_len;
         break; // fire once per triggering frame
         
     }
@@ -264,11 +275,21 @@ bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uin
 void injector_set_enabled(bool enabled)
 {
     injector_enabled = enabled;
+    injector_diag.injector_enabled = enabled ? 1 : 0;
 }
 
 bool injector_is_enabled(void)
 {
     return injector_enabled;
+}
+
+void injector_get_diag(injector_diag_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    injector_diag.injector_enabled = injector_enabled ? 1 : 0;
+    *out = injector_diag;
 }
 
 void setup_forwarder_with_injector(PIO pio,
