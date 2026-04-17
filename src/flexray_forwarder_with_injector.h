@@ -8,9 +8,9 @@
 typedef struct {
     uint32_t override_submit_count;
     uint32_t override_submit_accept_count;
-    uint32_t target96_cache_count;
-    uint32_t trigger60_cycle_match_count;
-    uint32_t override96_pop_hit_count;
+    uint32_t target_cache_count;
+    uint32_t trigger_cycle_match_count;
+    uint32_t override_pop_hit_count;
     uint32_t inject_fire_count;
     uint16_t last_target_id;
     uint8_t last_cycle_count;

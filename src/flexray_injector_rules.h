@@ -19,18 +19,34 @@ typedef struct {
 } trigger_rule_t;
 
 static const trigger_rule_t INJECT_TRIGGERS[] = {
-	// BMW i3 SAS-side lateral path uses 0x3c as the burst trigger.
-	// The active TX draft now patches frame 0x60 (96 dec) directly.
+	// Use 0x6A as the immediate same-src predecessor trigger for 0x83.
+	// Cache live 0x83, keep bytes 0/1/2/7/8 live from the OEM template, replace
+	// payload bytes 3..6 from the host, then fix the FlexRay cycle count +
+	// frame CRC before injection.
+	//
+	// Current host-side reconstruction for frame 0x83:
+	//   byte0 : live OEM cycle/phase
+	//   byte1 : live OEM unresolved coded byte
+	//   byte2 : live OEM rolling cadence (F0..FE)
+	//   byte3 : low byte of u
+	//   byte4 : high byte / wrap-counter byte of u
+	//   byte5 : active gate 0x80
+	//   byte6 : active gate 0x02
+	//   byte7 : live OEM
+	//   byte8 : live OEM
+	// with u = byte3 + 256*byte4 carrying the current best stock-compatible
+	// longitudinal target-speed-like value.
 	{
-		.trigger_id = 0x3c,
-		.target_id = 0x60,
+		.trigger_id = 0x6A,
+		.target_id = 0x83,
 		.cycle_mask = 0b11,
-		.cycle_base = 1,
+		.cycle_base = 0,
 		.e2e_offset = 0,
 		.e2e_len = 0,
-		.e2e_init_value = 0xd6,
-		.replace_offset = 0,
-		.replace_len = 9,
+		.e2e_init_value = 0x00,
+		// Preserve payload bytes 0, 1, 2, 7, and 8 from the live template.
+		.replace_offset = 3,
+		.replace_len = 4,
 		.direction = INJECT_DIRECTION_TO_VEHICLE,
 	},
 };

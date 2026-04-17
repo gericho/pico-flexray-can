@@ -114,9 +114,7 @@ void try_cache_last_target_frame(uint16_t frame_id, uint8_t cycle_count, uint16_
     memcpy(TEMPLATES[slot].data, captured_bytes, frame_len);
     TEMPLATES[slot].len = (uint16_t)frame_len;
     TEMPLATES[slot].valid = 1;
-    if (rule->target_id == 0x60) {
-        injector_diag.target96_cache_count++;
-    }
+    injector_diag.target_cache_count++;
 }
 
 static void fix_cycle_count(uint8_t *full_frame, uint8_t cycle_count)
@@ -170,9 +168,7 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if ((uint8_t)(cycle_count & INJECT_TRIGGERS[i].cycle_mask) != INJECT_TRIGGERS[i].cycle_base){
             continue;
         }
-        if (INJECT_TRIGGERS[i].trigger_id == 0x3c && INJECT_TRIGGERS[i].target_id == 0x60) {
-            injector_diag.trigger60_cycle_match_count++;
-        }
+        injector_diag.trigger_cycle_match_count++;
 
         int target_slot = find_cache_slot_for_id(INJECT_TRIGGERS[i].target_id, cycle_count);
         if (target_slot < 0){
@@ -189,10 +185,15 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if (!has_data) {
             continue;
         }
-        if (INJECT_TRIGGERS[i].target_id == 0x60) {
-            injector_diag.override96_pop_hit_count++;
-        }
-
+        injector_diag.override_pop_hit_count++;
+        // Keep payload bytes 0, 1, 2, 7, and 8 live from the cached OEM template.
+        // Patch payload bytes 3..6 from the host.
+        //
+        // For the current 0x83 host reconstruction this means:
+        //   payload[3] / payload[4] carry u = byte3 + 256*byte4
+        //   payload[5] / payload[6] carry the active gate 0x80 / 0x02
+        // while OEM cadence/structure stays live on payload[0], payload[1],
+        // payload[2], payload[7], and payload[8].
         memcpy(tpl_payload+INJECT_TRIGGERS[i].replace_offset, replace_bytes, INJECT_TRIGGERS[i].replace_len);
 
         if (INJECT_TRIGGERS[i].e2e_len > 0) {
