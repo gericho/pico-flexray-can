@@ -93,7 +93,10 @@ static inline bool host_override_try_pop_for(uint16_t id, uint8_t cycle_count, u
 
 static inline int find_cache_slot_for_id(uint16_t id, uint8_t cycle_count) {
     for (int i = 0; i < (int)NUM_TRIGGER_RULES; i++) {
-        if (INJECT_TRIGGERS[i].target_id == id && (uint8_t)(cycle_count & INJECT_TRIGGERS[i].cycle_mask) == INJECT_TRIGGERS[i].cycle_base) return i;
+        if (INJECT_TRIGGERS[i].target_id == id &&
+            (uint8_t)(cycle_count & INJECT_TRIGGERS[i].cache_cycle_mask) == INJECT_TRIGGERS[i].cache_cycle_base) {
+            return i;
+        }
     }
     return -1;
 }
@@ -182,7 +185,8 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         }
         injector_diag.trigger60_cycle_match_count++;
 
-        int target_slot = find_cache_slot_for_id(INJECT_TRIGGERS[i].target_id, cycle_count);
+        uint8_t target_cycle_count = (uint8_t)((cycle_count + INJECT_TRIGGERS[i].inject_cycle_offset) & 0x3Fu);
+        int target_slot = find_cache_slot_for_id(INJECT_TRIGGERS[i].target_id, target_cycle_count);
         if (target_slot < 0){
             continue;
         }
@@ -204,12 +208,12 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if (!INJECT_TRIGGERS[i].raw_override) {
             fix_e2e_payload(tpl_payload+INJECT_TRIGGERS[i].e2e_offset, INJECT_TRIGGERS[i].e2e_init_value, INJECT_TRIGGERS[i].e2e_len);
         }
-        fix_cycle_count(tpl->data, cycle_count);
+        fix_cycle_count(tpl->data, target_cycle_count);
         fix_flexray_frame_crc(tpl->data, tpl->len);
         inject_frame(tpl->data, tpl->len, INJECT_TRIGGERS[i].direction);
         injector_diag.inject_fire_count++;
         injector_diag.last_target_id = INJECT_TRIGGERS[i].target_id;
-        injector_diag.last_cycle_count = cycle_count;
+        injector_diag.last_cycle_count = target_cycle_count;
         injector_diag.last_direction = INJECT_TRIGGERS[i].direction;
         injector_diag.last_replace_len = INJECT_TRIGGERS[i].replace_len;
         break; // fire once per triggering frame
