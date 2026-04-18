@@ -161,6 +161,21 @@ void setup_pins(void)
     gpio_pull_up(TXEN_FR_3_PIN);
     gpio_pull_up(TXEN_FR_4_PIN);
 
+    // Keep all FlexRay TXD lines recessive before any TXEN streamer can enable
+    // a transceiver. The PIO forwarder takes these pins over later.
+    gpio_init(TXD_FR_1_PIN);
+    gpio_set_dir(TXD_FR_1_PIN, GPIO_OUT);
+    gpio_put(TXD_FR_1_PIN, 1);
+    gpio_init(TXD_FR_2_PIN);
+    gpio_set_dir(TXD_FR_2_PIN, GPIO_OUT);
+    gpio_put(TXD_FR_2_PIN, 1);
+    gpio_init(TXD_FR_3_PIN);
+    gpio_set_dir(TXD_FR_3_PIN, GPIO_OUT);
+    gpio_put(TXD_FR_3_PIN, 1);
+    gpio_init(TXD_FR_4_PIN);
+    gpio_set_dir(TXD_FR_4_PIN, GPIO_OUT);
+    gpio_put(TXD_FR_4_PIN, 1);
+
     gpio_init(RXD_FR_1_PIN);
     gpio_set_dir(RXD_FR_1_PIN, GPIO_IN);
     gpio_init(RXD_FR_2_PIN);
@@ -231,15 +246,16 @@ int main(void)
 
     // setup_replay(pio1, REPLAY_TX_PIN);
 
-    multicore_launch_core1(core1_entry);
-    sleep_ms(500);
-
-
+    // The forwarder must own TXD before core1 starts toggling TXEN. Otherwise
+    // a live bus can briefly see an enabled transceiver with an unmanaged TXD.
     setup_forwarder_with_injector(pio2,
                                   RXD_FR_1_PIN, TXD_FR_2_PIN,
                                   RXD_FR_2_PIN, TXD_FR_1_PIN,
                                   RXD_FR_3_PIN, TXD_FR_4_PIN,
                                   RXD_FR_4_PIN, TXD_FR_3_PIN);
+
+    multicore_launch_core1(core1_entry);
+    sleep_ms(100);
 
     stream_stats_t stats = (stream_stats_t){0};
 
@@ -270,10 +286,12 @@ int main(void)
             print_ram_usage();
         }
 
-        // Consume frame-end notifications from core1 (FR1/FR2 only;
-        // FR3/FR4 ISR just records frame IDs for channel demuxing)
+        // Consume frame-end notifications from both physical FlexRay pairs:
+        // bus 0 = FR1/FR2, bus 1 = FR3/FR4.
         static uint16_t last_end_idx_fr1 = 0;
         static uint16_t last_end_idx_fr2 = 0;
+        static uint16_t last_end_idx_fr3 = 0;
+        static uint16_t last_end_idx_fr4 = 0;
         static uint32_t last_seq = 0;
 
         uint32_t encoded;
@@ -290,32 +308,42 @@ int main(void)
             if (stats.total_notif > 1 && ((info.seq - last_seq) & 0x3FFFF) != 1) stats.seq_gap++;
             last_seq = info.seq;
 
-            if (info.is_fr2) stats.source_fr2++;
-            else stats.source_fr1++;
-
             volatile uint8_t *ring_base;
             uint16_t ring_mask;
-            uint16_t prev_end;
+            uint16_t *prev_end_ptr;
             uint8_t source;
 
-            if (info.is_fr2) {
+            if (info.bus == 0 && info.is_fr2) {
+                stats.source_fr2++;
                 ring_base = fr2_ring_buffer;
                 ring_mask = FR2_RING_MASK;
-                prev_end = last_end_idx_fr2;
+                prev_end_ptr = &last_end_idx_fr2;
                 source = FROM_FR2;
-            } else {
+            } else if (info.bus == 0) {
+                stats.source_fr1++;
                 ring_base = fr1_ring_buffer;
                 ring_mask = FR1_RING_MASK;
-                prev_end = last_end_idx_fr1;
+                prev_end_ptr = &last_end_idx_fr1;
                 source = FROM_FR1;
+            } else if (info.is_fr2) {
+                stats.source_fr4++;
+                ring_base = fr4_ring_buffer;
+                ring_mask = FR4_RING_MASK;
+                prev_end_ptr = &last_end_idx_fr4;
+                source = FROM_FR4;
+            } else {
+                stats.source_fr3++;
+                ring_base = fr3_ring_buffer;
+                ring_mask = FR3_RING_MASK;
+                prev_end_ptr = &last_end_idx_fr3;
+                source = FROM_FR3;
             }
 
-            uint16_t len = (uint16_t)((info.end_idx - prev_end) & ring_mask);
+            uint16_t len = (uint16_t)((info.end_idx - *prev_end_ptr) & ring_mask);
 
             if (len == 0 || len > MAX_FRAME_BUF_SIZE_BYTES)
             {
-                if (info.is_fr2) last_end_idx_fr2 = info.end_idx;
-                else last_end_idx_fr1 = info.end_idx;
+                *prev_end_ptr = info.end_idx;
                 if (len == 0) stats.zero_len++;
                 else stats.overflow_len++;
                 continue;
@@ -361,7 +389,7 @@ int main(void)
                         decay_frame_source_counts();
                     prev_cycle_for_decay = frame.cycle_count;
 
-                    uint8_t demuxed = lookup_frame_source(frame.frame_id);
+                    uint8_t demuxed = (info.bus == 0) ? lookup_frame_source(frame.frame_id) : FROM_UNKNOWN;
                     if (demuxed != FROM_UNKNOWN) {
                         frame.source |= demuxed;
                         if (demuxed & FROM_FR3) stats.source_fr3++;
@@ -374,8 +402,7 @@ int main(void)
                 pos = (uint16_t)(pos + expected_len);
             }
 
-            if (info.is_fr2) last_end_idx_fr2 = info.end_idx;
-            else last_end_idx_fr1 = info.end_idx;
+            *prev_end_ptr = info.end_idx;
         } while (notify_queue_pop(&encoded));
     }
 

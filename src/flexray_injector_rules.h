@@ -25,8 +25,8 @@ typedef struct {
 } trigger_rule_t;
 
 static const trigger_rule_t INJECT_TRIGGERS[] = {
-	// Current 2026-04-18 wiring: FR2 is the EPS ECU socket. EPS-directed
-	// candidate injections must go to FR2, not the previous FR3 mapping.
+	// Current 2026-04-18 wiring: FR3 is the EPS ECU side. EPS-directed
+	// candidate injections must go to FR3.
 	{
 		.trigger_id = 0x47,
 		.target_id = 0x48,
@@ -40,11 +40,13 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_init_value = 0xd6,
 		.replace_offset = 2,
 		.replace_len = 14,
-		.direction = INJECT_DIRECTION_TO_FR2,
+		.direction = INJECT_DIRECTION_TO_FR3,
 		.raw_override = 0,
 	},
 	{
-		.trigger_id = 0x42,
+		// Current SAS/EPS capture: 0x40/src13 immediately precedes the real
+		// 0x44/src13 branch. Odd 0x44 branches are zero templates.
+		.trigger_id = 0x40,
 		.target_id = 0x44,
 		.cycle_mask = 0b01,
 		.cycle_base = 0,
@@ -56,7 +58,7 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_init_value = 0,
 		.replace_offset = 0,
 		.replace_len = 16,
-		.direction = INJECT_DIRECTION_TO_FR2,
+		.direction = INJECT_DIRECTION_TO_FR3,
 		.raw_override = 1,
 	},
 	{
@@ -76,7 +78,7 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_init_value = 0,
 		.replace_offset = 0,
 		.replace_len = 16,
-		.direction = INJECT_DIRECTION_TO_FR2,
+		.direction = INJECT_DIRECTION_TO_FR3,
 		.raw_override = 1,
 	},
 	{
@@ -94,7 +96,7 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_init_value = 0,
 		.replace_offset = 0,
 		.replace_len = 16,
-		.direction = INJECT_DIRECTION_TO_FR2,
+		.direction = INJECT_DIRECTION_TO_FR3,
 		.raw_override = 1,
 	},
 };

@@ -41,7 +41,7 @@ void setup_stream(PIO pio,
                   uint rx_pin_from_fr1, uint tx_en_pin_to_fr2,
                   uint rx_pin_from_fr2, uint tx_en_pin_to_fr1);
 
-// Setup secondary stream (FR3/FR4) for source identification
+// Setup secondary stream (FR3/FR4)
 void setup_stream_fr34(PIO pio,
                        uint rx_pin_from_fr3, uint tx_en_pin_to_fr4,
                        uint rx_pin_from_fr4, uint tx_en_pin_to_fr3);
@@ -57,14 +57,14 @@ void clear_frame_source_bitmaps(void);
 void decay_frame_source_counts(void);
 
 // --- Cross-core notification ring (single producer on core1 ISR, single consumer on core0) ---
-// Encoded format: [31]=is_fr2, [30]=bus(0=FR12,1=FR34), [29:12]=seq(18 bits), [11:0]=ring index
+// Encoded format: [31]=is_fr2_or_fr4, [30]=bus(0=FR12,1=FR34), [29:12]=seq(18 bits), [11:0]=ring index
 bool notify_queue_pop(uint32_t *encoded);
 void notify_queue_init(void);
 uint32_t notify_queue_dropped(void);
 
 // Decoded notification info
 typedef struct {
-    bool is_fr2;        // true if FR2/FR4 side, false if FR1/FR3 side
+    bool is_fr2;        // bus 0: FR2 if true; bus 1: FR4 if true
     uint8_t bus;        // 0 = FR1/FR2, 1 = FR3/FR4
     uint32_t seq;       // 18-bit sequence
     uint16_t end_idx;   // 12-bit ring index (end position)

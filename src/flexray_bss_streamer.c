@@ -229,8 +229,6 @@ void __time_critical_func(streamer_irq0_handler)(void)
 }
 
 // ===================== FR3/FR4 IRQ handler =====================
-// Only records frame IDs seen on each channel for demuxing FR1/FR2.
-// Does NOT push to the notify queue.
 void __time_critical_func(streamer_fr34_irq0_handler)(void)
 {
     sio_hw->gpio_set = (1u << 7);
@@ -246,6 +244,8 @@ void __time_critical_func(streamer_fr34_irq0_handler)(void)
         uint16_t fid = (uint16_t)(((uint16_t)(h0 & 0x07) << 8) | h1);
         record_frame_id(fr3_source_counts, fid);
         fr3_prev_write_idx = fr3_idx_now;
+        uint32_t encoded = notify_encode(false, 1, ((irq_counter++) & 0x3FFFF), (uint16_t)fr3_idx_now);
+        (void)notify_queue_push(encoded);
     }
 
     if (fr4_idx_now != fr4_prev_write_idx) {
@@ -255,6 +255,8 @@ void __time_critical_func(streamer_fr34_irq0_handler)(void)
         uint16_t fid = (uint16_t)(((uint16_t)(h0 & 0x07) << 8) | h1);
         record_frame_id(fr4_source_counts, fid);
         fr4_prev_write_idx = fr4_idx_now;
+        uint32_t encoded = notify_encode(true, 1, ((irq_counter++) & 0x3FFFF), (uint16_t)fr4_idx_now);
+        (void)notify_queue_push(encoded);
     }
 
     sio_hw->gpio_clr = (1u << 7);
