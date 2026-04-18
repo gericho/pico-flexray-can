@@ -5,6 +5,11 @@
 #include "hardware/pio.h"
 #include "flexray_frame.h"
 
+// CPU-side frame streaming/parsing caused long-run forwarding instability on
+// FR3/FR4. Keep it disabled by default; PIO/DMA forwarding still runs.
+#ifndef FLEXRAY_CPU_STREAMING
+#define FLEXRAY_CPU_STREAMING 0
+#endif
 
 // --- Global State ---
 extern uint dma_data_from_fr1_chan;
@@ -41,7 +46,7 @@ void setup_stream(PIO pio,
                   uint rx_pin_from_fr1, uint tx_en_pin_to_fr2,
                   uint rx_pin_from_fr2, uint tx_en_pin_to_fr1);
 
-// Setup secondary stream (FR3/FR4)
+// Setup secondary stream (FR3/FR4) for source identification
 void setup_stream_fr34(PIO pio,
                        uint rx_pin_from_fr3, uint tx_en_pin_to_fr4,
                        uint rx_pin_from_fr4, uint tx_en_pin_to_fr3);
@@ -69,6 +74,20 @@ typedef struct {
     uint32_t seq;       // 18-bit sequence
     uint16_t end_idx;   // 12-bit ring index (end position)
 } notify_info_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t irq_counter;
+    uint32_t irq_handler_call_count;
+    uint32_t notify_dropped;
+    uint16_t rx_write_idx[4];
+    uint16_t dma_trans_count[4];
+    uint8_t streamer_pc[4];
+    uint8_t txen_level[4];
+    uint8_t pio0_irq;
+    uint8_t pio1_irq;
+} streamer_timing_diag_t;
+
+void streamer_get_timing_diag(streamer_timing_diag_t *out);
 
 // Decode encoded notification into structured fields
 static inline void notify_decode(uint32_t encoded, notify_info_t *out)

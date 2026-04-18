@@ -6,9 +6,19 @@
 #include "tusb.h"
 #include "flexray_frame.h"
 #include "flexray_fifo.h"
+#include "flexray_bss_streamer.h"
 #include "flexray_forwarder_with_injector.h"
 #include <string.h>
 
+#ifndef FLEXRAY_BASIC_FORWARD_ONLY
+#define FLEXRAY_BASIC_FORWARD_ONLY 1
+#endif
+
+// For delayed reset/bootloader
+static bool pending_reset = false;
+static bool pending_bootloader = false;
+
+#if !FLEXRAY_BASIC_FORWARD_ONLY
 // Add near top after includes
 static absolute_time_t last_usb_activity = 0;
 
@@ -36,10 +46,6 @@ static const uint8_t source_decimal[16] = {
 // FlexRay FIFO
 static flexray_fifo_t flexray_fifo;
 
-// For delayed reset/bootloader
-static bool pending_reset = false;
-static bool pending_bootloader = false;
-
 // Global state
 static struct
 {
@@ -54,8 +60,21 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
 static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *request);
 static bool handle_control_data_stage(tusb_control_request_t const *request, uint8_t const *data, uint16_t len);
 static bool try_send_from_fifo(const char *context);
+#else
+static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *request);
+static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *request);
+static bool handle_control_data_stage(tusb_control_request_t const *request, uint8_t const *data, uint16_t len);
+#endif
 
 #define PICO_REQ_GET_INJECTOR_DIAG 0xDA
+#define PICO_REQ_GET_TIMING_DIAG 0xD9
+
+#if !FLEXRAY_BASIC_FORWARD_ONLY
+typedef struct __attribute__((packed)) {
+    uint32_t uptime_ms;
+    streamer_timing_diag_t streamer;
+    forwarder_timing_diag_t forwarder;
+} timing_diag_t;
 // ------------------------------------------------------------
 // Vendor OUT protocol (host -> device)
 //  op 0x90: Push override replacement slice
@@ -97,6 +116,7 @@ static void handle_vendor_out_payload(const uint8_t *data, uint16_t len)
         }
     }
 }
+#endif
 
 
 // Placeholder for git version
@@ -107,6 +127,7 @@ void panda_usb_init(void)
     // Initialize TinyUSB
     tud_init(0);
 
+#if !FLEXRAY_BASIC_FORWARD_ONLY
     // Initialize FlexRay FIFO
     flexray_fifo_init(&flexray_fifo);
 
@@ -118,6 +139,7 @@ void panda_usb_init(void)
 
     printf("Panda USB initialized - VID:0x%04x PID:0x%04x\n", 0x3801, 0xddcc);
     last_usb_activity = get_absolute_time();
+#endif
 }
 
 void panda_usb_task(void)
@@ -188,6 +210,11 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
 
 static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *request)
 {
+#if FLEXRAY_BASIC_FORWARD_ONLY
+    (void)rhport;
+    (void)request;
+    return false;
+#else
     uint8_t response_data[64] = {0};
     uint16_t response_len = 0;
 
@@ -288,6 +315,20 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
         }
         break;
 
+    case PICO_REQ_GET_TIMING_DIAG:
+        {
+            timing_diag_t diag = {0};
+            diag.uptime_ms = to_ms_since_boot(get_absolute_time());
+            streamer_get_timing_diag(&diag.streamer);
+            forwarder_get_timing_diag(&diag.forwarder);
+            response_len = sizeof(diag);
+            if (response_len > sizeof(response_data)) {
+                response_len = sizeof(response_data);
+            }
+            memcpy(response_data, &diag, response_len);
+        }
+        break;
+
     case PANDA_GET_SIGNATURE_PART1:
         response_len = 64;
         memset(response_data, 0, response_len);
@@ -332,10 +373,29 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
     // }
 
     // return false;
+#endif
 }
 
 static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *request)
 {
+#if FLEXRAY_BASIC_FORWARD_ONLY
+    switch (request->bRequest)
+    {
+    case PANDA_ENTER_BOOTLOADER_MODE:
+        if (request->wValue == 0)
+        {
+            pending_bootloader = true;
+        }
+        return tud_control_status(rhport, request);
+
+    case PANDA_SYSTEM_RESET:
+        pending_reset = true;
+        return tud_control_status(rhport, request);
+
+    default:
+        return false;
+    }
+#else
     bool handled = false;
 
     // Handle write requests without data - just process them
@@ -425,10 +485,17 @@ static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *r
     }
 
     return false;
+#endif
 }
 
 static bool handle_control_data_stage(tusb_control_request_t const *request, uint8_t const *data, uint16_t len)
 {
+#if FLEXRAY_BASIC_FORWARD_ONLY
+    (void)request;
+    (void)data;
+    (void)len;
+    return false;
+#else
     // Process the received data for different commands
     switch (request->bRequest)
     {
@@ -655,4 +722,5 @@ static bool try_send_from_fifo(const char *context)
         return true;
     }
     return false;
+#endif
 }

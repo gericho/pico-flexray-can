@@ -95,4 +95,3 @@ target_link_libraries(pico_flexray
         )
 
 pico_add_extra_outputs(pico_flexray)
-

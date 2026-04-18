@@ -19,12 +19,12 @@
 // ===================== FR1/FR2 (primary) stream state =====================
 uint dma_data_from_fr1_chan;
 uint dma_data_from_fr2_chan;
-static uint dma_rearm_fr1_chan;
-static uint dma_rearm_fr2_chan;
 
 static PIO streamer_pio;
 static uint streamer_sm_fr1;
 static uint streamer_sm_fr2;
+static uint streamer_txen_fr1_pin;
+static uint streamer_txen_fr2_pin;
 
 volatile uint8_t fr1_ring_buffer[FR1_RING_SIZE_BYTES] __attribute__((aligned(FR1_RING_SIZE_BYTES)));
 volatile uint8_t fr2_ring_buffer[FR2_RING_SIZE_BYTES] __attribute__((aligned(FR2_RING_SIZE_BYTES)));
@@ -41,6 +41,8 @@ static uint dma_rearm_fr4_chan;
 static PIO streamer_pio_fr34;
 static uint streamer_sm_fr3;
 static uint streamer_sm_fr4;
+static uint streamer_txen_fr3_pin;
+static uint streamer_txen_fr4_pin;
 
 volatile uint8_t fr3_ring_buffer[FR3_RING_SIZE_BYTES] __attribute__((aligned(FR3_RING_SIZE_BYTES)));
 volatile uint8_t fr4_ring_buffer[FR4_RING_SIZE_BYTES] __attribute__((aligned(FR4_RING_SIZE_BYTES)));
@@ -160,6 +162,39 @@ uint32_t notify_queue_dropped(void)
     return notify_dropped;
 }
 
+void streamer_get_timing_diag(streamer_timing_diag_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    out->irq_counter = irq_counter;
+    out->irq_handler_call_count = irq_handler_call_count;
+    out->notify_dropped = notify_dropped;
+
+    out->rx_write_idx[0] = (uint16_t)dma_ring_write_idx(dma_data_from_fr1_chan, fr1_ring_buffer, FR1_RING_MASK);
+    out->rx_write_idx[1] = (uint16_t)dma_ring_write_idx(dma_data_from_fr2_chan, fr2_ring_buffer, FR2_RING_MASK);
+    out->rx_write_idx[2] = (uint16_t)dma_ring_write_idx(dma_data_from_fr3_chan, fr3_ring_buffer, FR3_RING_MASK);
+    out->rx_write_idx[3] = (uint16_t)dma_ring_write_idx(dma_data_from_fr4_chan, fr4_ring_buffer, FR4_RING_MASK);
+
+    out->dma_trans_count[0] = (uint16_t)(dma_channel_hw_addr(dma_data_from_fr1_chan)->transfer_count & 0xFFFFu);
+    out->dma_trans_count[1] = (uint16_t)(dma_channel_hw_addr(dma_data_from_fr2_chan)->transfer_count & 0xFFFFu);
+    out->dma_trans_count[2] = (uint16_t)(dma_channel_hw_addr(dma_data_from_fr3_chan)->transfer_count & 0xFFFFu);
+    out->dma_trans_count[3] = (uint16_t)(dma_channel_hw_addr(dma_data_from_fr4_chan)->transfer_count & 0xFFFFu);
+
+    out->streamer_pc[0] = (uint8_t)(streamer_pio->sm[streamer_sm_fr1].addr & 0x1Fu);
+    out->streamer_pc[1] = (uint8_t)(streamer_pio->sm[streamer_sm_fr2].addr & 0x1Fu);
+    out->streamer_pc[2] = (uint8_t)(streamer_pio_fr34->sm[streamer_sm_fr3].addr & 0x1Fu);
+    out->streamer_pc[3] = (uint8_t)(streamer_pio_fr34->sm[streamer_sm_fr4].addr & 0x1Fu);
+
+    out->txen_level[0] = (uint8_t)gpio_get(streamer_txen_fr1_pin);
+    out->txen_level[1] = (uint8_t)gpio_get(streamer_txen_fr2_pin);
+    out->txen_level[2] = (uint8_t)gpio_get(streamer_txen_fr3_pin);
+    out->txen_level[3] = (uint8_t)gpio_get(streamer_txen_fr4_pin);
+    out->pio0_irq = (uint8_t)(pio0->irq & 0xFFu);
+    out->pio1_irq = (uint8_t)(pio1->irq & 0xFFu);
+}
+
 // ===================== FR1/FR2 IRQ handler =====================
 void __time_critical_func(streamer_irq0_handler)(void)
 {
@@ -229,6 +264,8 @@ void __time_critical_func(streamer_irq0_handler)(void)
 }
 
 // ===================== FR3/FR4 IRQ handler =====================
+// Optional diagnostic handler. The normal forward-only EPS path does not enable
+// this IRQ, so FR3/FR4 forwarding is handled by PIO/DMA without CPU work.
 void __time_critical_func(streamer_fr34_irq0_handler)(void)
 {
     sio_hw->gpio_set = (1u << 7);
@@ -244,8 +281,6 @@ void __time_critical_func(streamer_fr34_irq0_handler)(void)
         uint16_t fid = (uint16_t)(((uint16_t)(h0 & 0x07) << 8) | h1);
         record_frame_id(fr3_source_counts, fid);
         fr3_prev_write_idx = fr3_idx_now;
-        uint32_t encoded = notify_encode(false, 1, ((irq_counter++) & 0x3FFFF), (uint16_t)fr3_idx_now);
-        (void)notify_queue_push(encoded);
     }
 
     if (fr4_idx_now != fr4_prev_write_idx) {
@@ -255,8 +290,6 @@ void __time_critical_func(streamer_fr34_irq0_handler)(void)
         uint16_t fid = (uint16_t)(((uint16_t)(h0 & 0x07) << 8) | h1);
         record_frame_id(fr4_source_counts, fid);
         fr4_prev_write_idx = fr4_idx_now;
-        uint32_t encoded = notify_encode(true, 1, ((irq_counter++) & 0x3FFFF), (uint16_t)fr4_idx_now);
-        (void)notify_queue_push(encoded);
     }
 
     sio_hw->gpio_clr = (1u << 7);
@@ -275,6 +308,8 @@ void setup_stream(PIO pio,
 
     streamer_sm_fr1 = sm_fr1;
     streamer_sm_fr2 = sm_fr2;
+    streamer_txen_fr2_pin = tx_en_pin_to_fr2;
+    streamer_txen_fr1_pin = tx_en_pin_to_fr1;
 
     flexray_bss_streamer_program_init(pio, sm_fr1, offset, rx_pin_from_fr1, tx_en_pin_to_fr2);
     flexray_bss_streamer_program_init(pio, sm_fr2, offset, rx_pin_from_fr2, tx_en_pin_to_fr1);
@@ -304,25 +339,22 @@ void setup_stream(PIO pio,
         fr2_ring_bits = 32 - __builtin_clz(FR2_RING_SIZE_BYTES - 1);
     }
     channel_config_set_ring(&dma_c_fr2, true, fr2_ring_bits);
-    dma_rearm_fr1_chan = dma_claim_unused_channel(true);
-    dma_rearm_fr2_chan = dma_claim_unused_channel(true);
-    channel_config_set_chain_to(&dma_c_fr1, dma_rearm_fr1_chan);
-    channel_config_set_chain_to(&dma_c_fr2, dma_rearm_fr2_chan);
-
     dma_channel_configure(dma_data_from_fr1_chan, &dma_c_fr1,
                           (void *)fr1_ring_buffer,
                           &pio->rxf[sm_fr1],
-                          DMA_BLOCK_COUNT_BYTES,
+                          dma_encode_endless_transfer_count(),
                           true);
     dma_channel_configure(dma_data_from_fr2_chan, &dma_c_fr2,
                           (void *)fr2_ring_buffer,
                           &pio->rxf[sm_fr2],
-                          DMA_BLOCK_COUNT_BYTES,
+                          dma_encode_endless_transfer_count(),
                           true);
 
+    #if FLEXRAY_CPU_STREAMING
     pio_set_irq0_source_enabled(pio, pis_interrupt3, true);
     irq_set_exclusive_handler(pio_get_irq_num(pio, 0), streamer_irq0_handler);
     irq_set_enabled(pio_get_irq_num(pio, 0), true);
+    #endif
 
     pio_interrupt_clear(pio, 3);
     pio_interrupt_clear(pio, 7);
@@ -343,6 +375,8 @@ void setup_stream_fr34(PIO pio,
 
     streamer_sm_fr3 = sm_fr3;
     streamer_sm_fr4 = sm_fr4;
+    streamer_txen_fr4_pin = tx_en_pin_to_fr4;
+    streamer_txen_fr3_pin = tx_en_pin_to_fr3;
 
     flexray_bss_streamer_program_init(pio, sm_fr3, offset, rx_pin_from_fr3, tx_en_pin_to_fr4);
     flexray_bss_streamer_program_init(pio, sm_fr4, offset, rx_pin_from_fr4, tx_en_pin_to_fr3);
@@ -389,10 +423,6 @@ void setup_stream_fr34(PIO pio,
                           &pio->rxf[sm_fr4],
                           DMA_BLOCK_COUNT_BYTES,
                           true);
-
-    pio_set_irq0_source_enabled(pio, pis_interrupt3, true);
-    irq_set_exclusive_handler(pio_get_irq_num(pio, 0), streamer_fr34_irq0_handler);
-    irq_set_enabled(pio_get_irq_num(pio, 0), true);
 
     pio_interrupt_clear(pio, 3);
     pio_interrupt_clear(pio, 7);
