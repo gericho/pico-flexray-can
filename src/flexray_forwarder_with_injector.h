@@ -6,15 +6,15 @@
 #include "hardware/pio.h"
 
 #ifndef FLEXRAY_ENABLE_INJECTOR
-#define FLEXRAY_ENABLE_INJECTOR 0
+#define FLEXRAY_ENABLE_INJECTOR 1
 #endif
 
 typedef struct __attribute__((packed)) {
     uint32_t override_submit_count;
     uint32_t override_submit_accept_count;
-    uint32_t target96_cache_count;
-    uint32_t trigger60_cycle_match_count;
-    uint32_t override96_pop_hit_count;
+    uint32_t target_cache_count;
+    uint32_t trigger_cycle_match_count;
+    uint32_t override_pop_hit_count;
     uint32_t inject_fire_count;
     uint16_t last_target_id;
     uint8_t last_cycle_count;
@@ -28,6 +28,8 @@ typedef struct __attribute__((packed)) {
     uint8_t txd_level[4];
     uint8_t pio2_irq;
     uint8_t injector_enabled;
+    uint8_t active_mask;
+    uint8_t reserved;
 } forwarder_timing_diag_t;
 
 // Cache a frame's raw bytes (header+payload+CRC) when rules match
@@ -45,6 +47,10 @@ void setup_forwarder_with_injector(PIO pio,
 void setup_forwarder_sas_only(PIO pio,
     uint rx_pin_from_fr1, uint tx_pin_to_fr2,
     uint rx_pin_from_fr2, uint tx_pin_to_fr1);
+
+void setup_forwarder_eps_only(PIO pio,
+    uint rx_pin_from_fr3, uint tx_pin_to_fr4,
+    uint rx_pin_from_fr4, uint tx_pin_to_fr3);
 
 // Submit a host-provided replacement slice to be used on next matching injection
 // bytes must contain only the replacement payload slice; length must equal rule->replace_len

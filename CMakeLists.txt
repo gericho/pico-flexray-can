@@ -33,6 +33,10 @@ project(pico_flexray C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+set(FLEXRAY_FORWARD_MODE "FLEXRAY_MODE_DUAL" CACHE STRING "Forwarding mode: FLEXRAY_MODE_SAS_ONLY, FLEXRAY_MODE_EPS_ONLY, or FLEXRAY_MODE_DUAL")
+set(FLEXRAY_BASIC_FORWARD_ONLY "0" CACHE STRING "Use minimal forwarding-only USB interface")
+set(FLEXRAY_ENABLE_INJECTOR "1" CACHE STRING "Enable FlexRay injector logic")
+
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(pico_flexray
@@ -83,6 +87,12 @@ target_link_libraries(pico_flexray
 target_include_directories(pico_flexray PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
         ${CMAKE_CURRENT_LIST_DIR}/src
+)
+
+target_compile_definitions(pico_flexray PRIVATE
+        FLEXRAY_FORWARD_MODE=${FLEXRAY_FORWARD_MODE}
+        FLEXRAY_BASIC_FORWARD_ONLY=${FLEXRAY_BASIC_FORWARD_ONLY}
+        FLEXRAY_ENABLE_INJECTOR=${FLEXRAY_ENABLE_INJECTOR}
 )
 
 # Enable strict compiler warnings for C sources and treat warnings as errors

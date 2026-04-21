@@ -11,6 +11,10 @@
 #define FLEXRAY_CPU_STREAMING 0
 #endif
 
+#ifndef FLEXRAY_TIMING_IRQ_DIAG
+#define FLEXRAY_TIMING_IRQ_DIAG 1
+#endif
+
 // --- Global State ---
 extern uint dma_data_from_fr1_chan;
 extern uint dma_data_from_fr2_chan;
@@ -66,6 +70,7 @@ void decay_frame_source_counts(void);
 bool notify_queue_pop(uint32_t *encoded);
 void notify_queue_init(void);
 uint32_t notify_queue_dropped(void);
+void streamer_process_notify(uint32_t encoded);
 
 // Decoded notification info
 typedef struct {
@@ -85,9 +90,27 @@ typedef struct __attribute__((packed)) {
     uint8_t txen_level[4];
     uint8_t pio0_irq;
     uint8_t pio1_irq;
+    uint8_t active_mask;
+    uint8_t reserved;
 } streamer_timing_diag_t;
 
 void streamer_get_timing_diag(streamer_timing_diag_t *out);
+
+typedef struct __attribute__((packed)) {
+    uint32_t event_count[2];      // 0=FR1/FR2 streamer PIO, 1=FR3/FR4 streamer PIO
+    uint32_t last_event_us[2];
+    uint32_t last_dt_us[2];
+    uint32_t min_dt_us[2];
+    uint32_t max_dt_us[2];
+    uint16_t last_rx_idx[4];
+    uint16_t last_rx_delta[4];
+    uint8_t pio_irq[2];
+    uint8_t active_mask;
+    uint8_t reserved;
+} streamer_edge_diag_t;
+
+void streamer_get_edge_diag(streamer_edge_diag_t *out);
+void streamer_reset_edge_diag(void);
 
 // Decode encoded notification into structured fields
 static inline void notify_decode(uint32_t encoded, notify_info_t *out)

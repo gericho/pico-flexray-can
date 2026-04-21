@@ -83,6 +83,21 @@ Run-time:
 - USB enumerates as a vendor-specific device (no CDC serial). Use UART for logs.
 - On boot, the app prints pin assignments and status, enables transceivers, and starts forwarding.
 
+### BMW i3 EPS torque-control rule
+
+Current experimental steering injection uses direct USB overrides and does not
+depend on the openpilot DBC path.
+
+- `0x44` is treated as the EPS torque command between BDC and EPS.
+- `0x44` is not an angle request. It applies steering torque; the steering
+  angle is the physical EPS/vehicle response over time.
+- Steering angle is approximately proportional to the double integral of
+  steering torque over time, with real limits from inertia, friction, EPS assist,
+  tire load, vehicle speed, driver input and EPS safety logic.
+- `0x33` is the absolute steering-angle feedback frame used to verify whether
+  an injected torque command moved the wheel.
+- Do not use `0x15` as the primary steering command while testing this path.
+
 ### Adjusting pins or board
 
 If you use a different board or wiring, update the GPIO defines at the top of `src/main.c` and/or modify set(PICO_BOARD pico2 CACHE STRING "Board type") in CMakeLists.txt. Rebuild and reflash.

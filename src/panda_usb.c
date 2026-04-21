@@ -3,15 +3,17 @@
 #include "pico/unique_id.h"
 #include "pico/bootrom.h"
 #include "hardware/watchdog.h"
+#include "hardware/gpio.h"
 #include "tusb.h"
 #include "flexray_frame.h"
 #include "flexray_fifo.h"
 #include "flexray_bss_streamer.h"
 #include "flexray_forwarder_with_injector.h"
+#include "flexray_board_pins.h"
 #include <string.h>
 
 #ifndef FLEXRAY_BASIC_FORWARD_ONLY
-#define FLEXRAY_BASIC_FORWARD_ONLY 1
+#define FLEXRAY_BASIC_FORWARD_ONLY 0
 #endif
 
 // For delayed reset/bootloader
@@ -68,13 +70,40 @@ static bool handle_control_data_stage(tusb_control_request_t const *request, uin
 
 #define PICO_REQ_GET_INJECTOR_DIAG 0xDA
 #define PICO_REQ_GET_TIMING_DIAG 0xD9
+#define PICO_REQ_GET_EDGE_DIAG 0xD7
+#define PICO_REQ_RESET_EDGE_DIAG 0xD6
 
-#if !FLEXRAY_BASIC_FORWARD_ONLY
+typedef struct __attribute__((packed)) {
+    uint8_t bge_level;
+    uint8_t stbn_level;
+    uint8_t relay_fr12_level;
+    uint8_t relay_fr34_level;
+    uint8_t rxd_level[4];
+} board_timing_diag_t;
+
 typedef struct __attribute__((packed)) {
     uint32_t uptime_ms;
     streamer_timing_diag_t streamer;
     forwarder_timing_diag_t forwarder;
+    board_timing_diag_t board;
 } timing_diag_t;
+
+static void board_get_timing_diag(board_timing_diag_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    out->bge_level = (uint8_t)gpio_get(BGE_PIN);
+    out->stbn_level = (uint8_t)gpio_get(STBN_PIN);
+    out->relay_fr12_level = (uint8_t)gpio_get(RELAY_FR_1_2);
+    out->relay_fr34_level = (uint8_t)gpio_get(RELAY_FR_3_4);
+    out->rxd_level[0] = (uint8_t)gpio_get(RXD_FR_1_PIN);
+    out->rxd_level[1] = (uint8_t)gpio_get(RXD_FR_2_PIN);
+    out->rxd_level[2] = (uint8_t)gpio_get(RXD_FR_3_PIN);
+    out->rxd_level[3] = (uint8_t)gpio_get(RXD_FR_4_PIN);
+}
+
+#if !FLEXRAY_BASIC_FORWARD_ONLY
 // ------------------------------------------------------------
 // Vendor OUT protocol (host -> device)
 //  op 0x90: Push override replacement slice
@@ -211,8 +240,22 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
 static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *request)
 {
 #if FLEXRAY_BASIC_FORWARD_ONLY
+    if (request->bRequest == PICO_REQ_GET_EDGE_DIAG) {
+        static streamer_edge_diag_t diag;
+        memset(&diag, 0, sizeof(diag));
+        streamer_get_edge_diag(&diag);
+        return tud_control_xfer(rhport, request, &diag, sizeof(diag));
+    }
+    if (request->bRequest == PICO_REQ_GET_TIMING_DIAG) {
+        static timing_diag_t diag;
+        memset(&diag, 0, sizeof(diag));
+        diag.uptime_ms = to_ms_since_boot(get_absolute_time());
+        streamer_get_timing_diag(&diag.streamer);
+        forwarder_get_timing_diag(&diag.forwarder);
+        board_get_timing_diag(&diag.board);
+        return tud_control_xfer(rhport, request, &diag, sizeof(diag));
+    }
     (void)rhport;
-    (void)request;
     return false;
 #else
     uint8_t response_data[64] = {0};
@@ -321,6 +364,19 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
             diag.uptime_ms = to_ms_since_boot(get_absolute_time());
             streamer_get_timing_diag(&diag.streamer);
             forwarder_get_timing_diag(&diag.forwarder);
+            board_get_timing_diag(&diag.board);
+            response_len = sizeof(diag);
+            if (response_len > sizeof(response_data)) {
+                response_len = sizeof(response_data);
+            }
+            memcpy(response_data, &diag, response_len);
+        }
+        break;
+
+    case PICO_REQ_GET_EDGE_DIAG:
+        {
+            streamer_edge_diag_t diag = {0};
+            streamer_get_edge_diag(&diag);
             response_len = sizeof(diag);
             if (response_len > sizeof(response_data)) {
                 response_len = sizeof(response_data);
@@ -381,6 +437,10 @@ static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *r
 #if FLEXRAY_BASIC_FORWARD_ONLY
     switch (request->bRequest)
     {
+    case PICO_REQ_RESET_EDGE_DIAG:
+        streamer_reset_edge_diag();
+        return tud_control_status(rhport, request);
+
     case PANDA_ENTER_BOOTLOADER_MODE:
         if (request->wValue == 0)
         {
@@ -401,6 +461,11 @@ static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *r
     // Handle write requests without data - just process them
     switch (request->bRequest)
     {
+    case PICO_REQ_RESET_EDGE_DIAG:
+        streamer_reset_edge_diag();
+        handled = true;
+        break;
+
     case PANDA_RESET_CAN_COMMS:
         // printf("Control Write: RESET_CAN_COMMS (request=0x%02x)\n", request->bRequest);
         flexray_fifo_init(&flexray_fifo);

@@ -28,68 +28,15 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 	// Current 2026-04-18 wiring: FR3 is the EPS ECU side. EPS-directed
 	// candidate injections must go to FR3.
 	{
-		.trigger_id = 0x47,
+		// I-CAN-hack style STEER_REQUEST injection, adapted to our stream:
+		// this EPS side has no 0x47 slot; 0x46 is the nearest live predecessor
+		// observed immediately before 0x48 on odd cycles.
+		.trigger_id = 0x46,
 		.target_id = 0x48,
-		.cycle_mask = 0b11,
+		.cycle_mask = 0b01,
 		.cycle_base = 1,
-		.cache_cycle_mask = 0b11,
+		.cache_cycle_mask = 0b01,
 		.cache_cycle_base = 1,
-		.inject_cycle_offset = 0,
-		.e2e_offset = 0,
-		.e2e_len = 15,
-		.e2e_init_value = 0xd6,
-		.replace_offset = 2,
-		.replace_len = 14,
-		.direction = INJECT_DIRECTION_TO_FR3,
-		.raw_override = 0,
-	},
-	{
-		// Current SAS/EPS capture: 0x40/src13 immediately precedes the real
-		// 0x44/src13 branch. Odd 0x44 branches are zero templates.
-		.trigger_id = 0x40,
-		.target_id = 0x44,
-		.cycle_mask = 0b01,
-		.cycle_base = 0,
-		.cache_cycle_mask = 0b01,
-		.cache_cycle_base = 0,
-		.inject_cycle_offset = 0,
-		.e2e_offset = 0,
-		.e2e_len = 0,
-		.e2e_init_value = 0,
-		.replace_offset = 0,
-		.replace_len = 16,
-		.direction = INJECT_DIRECTION_TO_FR3,
-		.raw_override = 1,
-	},
-	{
-		// Local 0x15 angle-request candidate.
-		// Route 58/59 timing: same-src predecessor is usually 0x83 at cycle N,
-		// target 0x15 real branch follows at cycle N+1. Cache only real/even
-		// 0x15 templates, but pop host overrides on odd 0x83 trigger cycles.
-		.trigger_id = 0x83,
-		.target_id = 0x15,
-		.cycle_mask = 0b01,
-		.cycle_base = 1,
-		.cache_cycle_mask = 0b01,
-		.cache_cycle_base = 0,
-		.inject_cycle_offset = 1,
-		.e2e_offset = 0,
-		.e2e_len = 0,
-		.e2e_init_value = 0,
-		.replace_offset = 0,
-		.replace_len = 16,
-		.direction = INJECT_DIRECTION_TO_FR3,
-		.raw_override = 1,
-	},
-	{
-		// Local 0x38 angle-like support/copy candidate.
-		// Route 58/59 timing: 0x37 immediately precedes 0x38 on the same cycle.
-		.trigger_id = 0x37,
-		.target_id = 0x38,
-		.cycle_mask = 0b00,
-		.cycle_base = 0,
-		.cache_cycle_mask = 0b00,
-		.cache_cycle_base = 0,
 		.inject_cycle_offset = 0,
 		.e2e_offset = 0,
 		.e2e_len = 0,

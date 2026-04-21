@@ -16,10 +16,15 @@ static uint sm_forwarder_with_injector_to_fr1;
 static uint sm_forwarder_with_injector_to_fr2;
 static uint sm_forwarder_with_injector_to_fr3;
 static uint sm_forwarder_with_injector_to_fr4;
+static uint forwarder_program_offset;
 static uint tx_pin_to_fr1_saved;
 static uint tx_pin_to_fr2_saved;
 static uint tx_pin_to_fr3_saved;
 static uint tx_pin_to_fr4_saved;
+static bool forwarder_active_fr1 = false;
+static bool forwarder_active_fr2 = false;
+static bool forwarder_active_fr3 = false;
+static bool forwarder_active_fr4 = false;
 
 extern volatile int dma_inject_chan_to_fr1;
 extern volatile int dma_inject_chan_to_fr2;
@@ -58,6 +63,11 @@ static volatile uint32_t host_override_tail = 0;
 static host_override_t host_overrides[HOST_OVERRIDE_CAP];
 static volatile bool injector_enabled = false;
 static injector_diag_t injector_diag = {0};
+
+static inline uint8_t forwarder_relative_pc(uint sm)
+{
+    return (uint8_t)((pio_forwarder_with_injector->sm[sm].addr - forwarder_program_offset) & 0x1Fu);
+}
 
 static inline bool host_override_push(uint16_t id, uint8_t mask, uint8_t base, uint16_t len, const uint8_t *bytes)
 {
@@ -115,18 +125,13 @@ void try_cache_last_target_frame(uint16_t frame_id, uint8_t cycle_count, uint16_
         return;
     }
 
-    const trigger_rule_t *rule = &INJECT_TRIGGERS[slot];
-    if ((uint8_t)(cycle_count & rule->cycle_mask) != rule->cycle_base){
-        return;
-    }
-
     if (frame_len > sizeof(TEMPLATES[slot].data)) {
         return;
     }
     memcpy(TEMPLATES[slot].data, captured_bytes, frame_len);
     TEMPLATES[slot].len = (uint16_t)frame_len;
     TEMPLATES[slot].valid = 1;
-    injector_diag.target96_cache_count++;
+    injector_diag.target_cache_count++;
 }
 
 static void fix_cycle_count(uint8_t *full_frame, uint8_t cycle_count)
@@ -153,22 +158,37 @@ static void inject_frame(uint8_t *full_frame, uint16_t injector_payload_length, 
 
     switch (direction) {
     case INJECT_DIRECTION_TO_FR1:
+        if (!forwarder_active_fr1) {
+            return;
+        }
         sm = sm_forwarder_with_injector_to_fr1;
         dma_chan = dma_inject_chan_to_fr1;
         break;
     case INJECT_DIRECTION_TO_FR2:
+        if (!forwarder_active_fr2) {
+            return;
+        }
         sm = sm_forwarder_with_injector_to_fr2;
         dma_chan = dma_inject_chan_to_fr2;
         break;
     case INJECT_DIRECTION_TO_FR3:
+        if (!forwarder_active_fr3) {
+            return;
+        }
         sm = sm_forwarder_with_injector_to_fr3;
         dma_chan = dma_inject_chan_to_fr3;
         break;
     case INJECT_DIRECTION_TO_FR4:
+        if (!forwarder_active_fr4) {
+            return;
+        }
         sm = sm_forwarder_with_injector_to_fr4;
         dma_chan = dma_inject_chan_to_fr4;
         break;
     default:
+        return;
+    }
+    if (dma_chan < 0) {
         return;
     }
 
@@ -194,7 +214,7 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if ((uint8_t)(cycle_count & INJECT_TRIGGERS[i].cycle_mask) != INJECT_TRIGGERS[i].cycle_base){
             continue;
         }
-        injector_diag.trigger60_cycle_match_count++;
+        injector_diag.trigger_cycle_match_count++;
 
         uint8_t target_cycle_count = (uint8_t)((cycle_count + INJECT_TRIGGERS[i].inject_cycle_offset) & 0x3Fu);
         int target_slot = find_cache_slot_for_id(INJECT_TRIGGERS[i].target_id, target_cycle_count);
@@ -212,7 +232,7 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if (!has_data) {
             continue;
         }
-        injector_diag.override96_pop_hit_count++;
+        injector_diag.override_pop_hit_count++;
 
         memcpy(tpl_payload+INJECT_TRIGGERS[i].replace_offset, replace_bytes, INJECT_TRIGGERS[i].replace_len);
     
@@ -247,10 +267,18 @@ static void setup_inject_dma_channel(volatile int *chan, dma_channel_config *dc,
 }
 
 static void setup_dma(void){
-    setup_inject_dma_channel(&dma_inject_chan_to_fr1, &injector_to_fr1_dc, sm_forwarder_with_injector_to_fr1);
-    setup_inject_dma_channel(&dma_inject_chan_to_fr2, &injector_to_fr2_dc, sm_forwarder_with_injector_to_fr2);
-    setup_inject_dma_channel(&dma_inject_chan_to_fr3, &injector_to_fr3_dc, sm_forwarder_with_injector_to_fr3);
-    setup_inject_dma_channel(&dma_inject_chan_to_fr4, &injector_to_fr4_dc, sm_forwarder_with_injector_to_fr4);
+    if (forwarder_active_fr1) {
+        setup_inject_dma_channel(&dma_inject_chan_to_fr1, &injector_to_fr1_dc, sm_forwarder_with_injector_to_fr1);
+    }
+    if (forwarder_active_fr2) {
+        setup_inject_dma_channel(&dma_inject_chan_to_fr2, &injector_to_fr2_dc, sm_forwarder_with_injector_to_fr2);
+    }
+    if (forwarder_active_fr3) {
+        setup_inject_dma_channel(&dma_inject_chan_to_fr3, &injector_to_fr3_dc, sm_forwarder_with_injector_to_fr3);
+    }
+    if (forwarder_active_fr4) {
+        setup_inject_dma_channel(&dma_inject_chan_to_fr4, &injector_to_fr4_dc, sm_forwarder_with_injector_to_fr4);
+    }
 }
 #endif
 
@@ -279,11 +307,6 @@ bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uin
 
     if (matched_rule->raw_override) {
         if ((uint8_t)(bytes[0] & matched_rule->cycle_mask) != matched_rule->cycle_base) {
-            return false;
-        }
-    } else {
-        uint8_t crc = calculate_autosar_e2e_crc8(bytes+1, 0xf1, len-1);
-        if (crc != bytes[0]) {
             return false;
         }
     }
@@ -321,15 +344,29 @@ void forwarder_get_timing_diag(forwarder_timing_diag_t *out)
         return;
     }
     memset(out, 0, sizeof(*out));
-    out->forwarder_pc[0] = (uint8_t)(pio_forwarder_with_injector->sm[sm_forwarder_with_injector_to_fr1].addr & 0x1Fu);
-    out->forwarder_pc[1] = (uint8_t)(pio_forwarder_with_injector->sm[sm_forwarder_with_injector_to_fr2].addr & 0x1Fu);
-    out->forwarder_pc[2] = (uint8_t)(pio_forwarder_with_injector->sm[sm_forwarder_with_injector_to_fr3].addr & 0x1Fu);
-    out->forwarder_pc[3] = (uint8_t)(pio_forwarder_with_injector->sm[sm_forwarder_with_injector_to_fr4].addr & 0x1Fu);
-    out->txd_level[0] = (uint8_t)gpio_get(tx_pin_to_fr1_saved);
-    out->txd_level[1] = (uint8_t)gpio_get(tx_pin_to_fr2_saved);
-    out->txd_level[2] = (uint8_t)gpio_get(tx_pin_to_fr3_saved);
-    out->txd_level[3] = (uint8_t)gpio_get(tx_pin_to_fr4_saved);
-    out->pio2_irq = (uint8_t)(pio_forwarder_with_injector->irq & 0xFFu);
+    out->active_mask = (forwarder_active_fr1 ? 0x01u : 0u) |
+                       (forwarder_active_fr2 ? 0x02u : 0u) |
+                       (forwarder_active_fr3 ? 0x04u : 0u) |
+                       (forwarder_active_fr4 ? 0x08u : 0u);
+    if (pio_forwarder_with_injector != NULL) {
+        if (forwarder_active_fr1) {
+            out->forwarder_pc[0] = forwarder_relative_pc(sm_forwarder_with_injector_to_fr1);
+            out->txd_level[0] = (uint8_t)gpio_get(tx_pin_to_fr1_saved);
+        }
+        if (forwarder_active_fr2) {
+            out->forwarder_pc[1] = forwarder_relative_pc(sm_forwarder_with_injector_to_fr2);
+            out->txd_level[1] = (uint8_t)gpio_get(tx_pin_to_fr2_saved);
+        }
+        if (forwarder_active_fr3) {
+            out->forwarder_pc[2] = forwarder_relative_pc(sm_forwarder_with_injector_to_fr3);
+            out->txd_level[2] = (uint8_t)gpio_get(tx_pin_to_fr3_saved);
+        }
+        if (forwarder_active_fr4) {
+            out->forwarder_pc[3] = forwarder_relative_pc(sm_forwarder_with_injector_to_fr4);
+            out->txd_level[3] = (uint8_t)gpio_get(tx_pin_to_fr4_saved);
+        }
+        out->pio2_irq = (uint8_t)(pio_forwarder_with_injector->irq & 0xFFu);
+    }
     out->injector_enabled = injector_enabled ? 1 : 0;
 }
 
@@ -340,11 +377,16 @@ void setup_forwarder_with_injector(PIO pio,
     uint rx_pin_from_fr4, uint tx_pin_to_fr3)
 {
     pio_forwarder_with_injector = pio;
+    forwarder_active_fr1 = true;
+    forwarder_active_fr2 = true;
+    forwarder_active_fr3 = true;
+    forwarder_active_fr4 = true;
     tx_pin_to_fr1_saved = tx_pin_to_fr1;
     tx_pin_to_fr2_saved = tx_pin_to_fr2;
     tx_pin_to_fr3_saved = tx_pin_to_fr3;
     tx_pin_to_fr4_saved = tx_pin_to_fr4;
     uint offset = pio_add_program(pio, &flexray_forwarder_with_injector_program);
+    forwarder_program_offset = offset;
     sm_forwarder_with_injector_to_fr1 = pio_claim_unused_sm(pio, true);
     sm_forwarder_with_injector_to_fr2 = pio_claim_unused_sm(pio, true);
     sm_forwarder_with_injector_to_fr3 = pio_claim_unused_sm(pio, true);
@@ -364,12 +406,17 @@ void setup_forwarder_sas_only(PIO pio,
     uint rx_pin_from_fr2, uint tx_pin_to_fr1)
 {
     pio_forwarder_with_injector = pio;
+    forwarder_active_fr1 = true;
+    forwarder_active_fr2 = true;
+    forwarder_active_fr3 = false;
+    forwarder_active_fr4 = false;
     tx_pin_to_fr1_saved = tx_pin_to_fr1;
     tx_pin_to_fr2_saved = tx_pin_to_fr2;
     tx_pin_to_fr3_saved = 0;
     tx_pin_to_fr4_saved = 0;
 
     uint offset = pio_add_program(pio, &flexray_forwarder_with_injector_program);
+    forwarder_program_offset = offset;
     sm_forwarder_with_injector_to_fr1 = pio_claim_unused_sm(pio, true);
     sm_forwarder_with_injector_to_fr2 = pio_claim_unused_sm(pio, true);
     sm_forwarder_with_injector_to_fr3 = 0;
@@ -377,4 +424,35 @@ void setup_forwarder_sas_only(PIO pio,
 
     flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_fr2, offset, rx_pin_from_fr1, tx_pin_to_fr2);
     flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_fr1, offset, rx_pin_from_fr2, tx_pin_to_fr1);
+    #if FLEXRAY_ENABLE_INJECTOR
+    setup_dma();
+    #endif
+}
+
+void setup_forwarder_eps_only(PIO pio,
+    uint rx_pin_from_fr3, uint tx_pin_to_fr4,
+    uint rx_pin_from_fr4, uint tx_pin_to_fr3)
+{
+    pio_forwarder_with_injector = pio;
+    forwarder_active_fr1 = false;
+    forwarder_active_fr2 = false;
+    forwarder_active_fr3 = true;
+    forwarder_active_fr4 = true;
+    tx_pin_to_fr1_saved = 0;
+    tx_pin_to_fr2_saved = 0;
+    tx_pin_to_fr3_saved = tx_pin_to_fr3;
+    tx_pin_to_fr4_saved = tx_pin_to_fr4;
+
+    uint offset = pio_add_program(pio, &flexray_forwarder_with_injector_program);
+    forwarder_program_offset = offset;
+    sm_forwarder_with_injector_to_fr1 = 0;
+    sm_forwarder_with_injector_to_fr2 = 0;
+    sm_forwarder_with_injector_to_fr3 = pio_claim_unused_sm(pio, true);
+    sm_forwarder_with_injector_to_fr4 = pio_claim_unused_sm(pio, true);
+
+    flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_fr4, offset, rx_pin_from_fr3, tx_pin_to_fr4);
+    flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_fr3, offset, rx_pin_from_fr4, tx_pin_to_fr3);
+    #if FLEXRAY_ENABLE_INJECTOR
+    setup_dma();
+    #endif
 }
