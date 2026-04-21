@@ -19,6 +19,24 @@ A Raspberry Pi Pico-based FlexRay man-in-the-middle (MITM) bridge that forwards 
 
 Refer to your board’s pinout for physical pad/header locations. Signals below use Pico GPIO numbers as configured in `src/main.c`.
 
+Current BMW i3 dual-fast bench wiring:
+
+| FlexRay port | Physical connection |
+|---|---|
+| `FR1` | BDC side to SAS |
+| `FR2` | SAS ECU |
+| `FR3` | DSC-EPS ECUs |
+| `FR4` | BDC side to DSC-EPS |
+
+The forward-only test firmware streams these as separate Cabana sources:
+
+| FlexRay port | Cabana source |
+|---|---|
+| `FR1` | `src1` |
+| `FR2` | `src2` |
+| `FR3` | `src3` |
+| `FR4` | `src4` |
+
 | GPIO | Signal | Direction | Side | Notes |
 |---:|---|---|---|---|
 | 2 | `BGE` | Output | Both | BGE to FlexRay transceivers (set High to enable)
