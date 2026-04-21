@@ -11,8 +11,10 @@
 #define FRAME_BUF_SIZE_BYTES 8 + MAX_FRAME_PAYLOAD_BYTES
 #define MAX_FRAME_BUF_SIZE_BYTES 264
 
-#define FROM_ECU 0
-#define FROM_VEHICLE 1
+#define FROM_FR1 1
+#define FROM_FR2 2
+#define FROM_FR3 3
+#define FROM_FR4 4
 #define FROM_UNKNOWN 0xff
 
 // FlexRay frame structure definition based on specification

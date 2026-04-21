@@ -268,3 +268,22 @@ void setup_forwarder_with_injector(PIO pio,
     flexray_forwarder_with_injector_program_init(pio, sm_forwarder_with_injector_to_ecu, offset, rx_pin_from_vehicle, tx_pin_to_ecu);
     setup_dma();
 }
+
+void setup_forwarder_dual(PIO pio,
+    uint rx_pin_from_fr1, uint tx_pin_to_fr2,
+    uint rx_pin_from_fr2, uint tx_pin_to_fr1,
+    uint rx_pin_from_fr3, uint tx_pin_to_fr4,
+    uint rx_pin_from_fr4, uint tx_pin_to_fr3)
+{
+    pio_forwarder_with_injector = pio;
+    uint offset = pio_add_program(pio, &flexray_forwarder_with_injector_program);
+    uint sm_to_fr2 = pio_claim_unused_sm(pio, true);
+    uint sm_to_fr1 = pio_claim_unused_sm(pio, true);
+    uint sm_to_fr4 = pio_claim_unused_sm(pio, true);
+    uint sm_to_fr3 = pio_claim_unused_sm(pio, true);
+
+    flexray_forwarder_with_injector_program_init(pio, sm_to_fr2, offset, rx_pin_from_fr1, tx_pin_to_fr2);
+    flexray_forwarder_with_injector_program_init(pio, sm_to_fr1, offset, rx_pin_from_fr2, tx_pin_to_fr1);
+    flexray_forwarder_with_injector_program_init(pio, sm_to_fr4, offset, rx_pin_from_fr3, tx_pin_to_fr4);
+    flexray_forwarder_with_injector_program_init(pio, sm_to_fr3, offset, rx_pin_from_fr4, tx_pin_to_fr3);
+}

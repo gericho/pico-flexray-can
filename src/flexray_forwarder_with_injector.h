@@ -15,6 +15,12 @@ void setup_forwarder_with_injector(PIO pio,
     uint rx_pin_from_ecu, uint tx_pin_to_vehicle,
     uint rx_pin_from_vehicle, uint tx_pin_to_ecu);
 
+void setup_forwarder_dual(PIO pio,
+    uint rx_pin_from_fr1, uint tx_pin_to_fr2,
+    uint rx_pin_from_fr2, uint tx_pin_to_fr1,
+    uint rx_pin_from_fr3, uint tx_pin_to_fr4,
+    uint rx_pin_from_fr4, uint tx_pin_to_fr3);
+
 // Submit a host-provided replacement slice to be used on next matching injection
 // bytes must contain only the replacement payload slice; length must equal rule->replace_len
 // The override applies when id matches a rule's target_id and (cycle_count & rule->cycle_mask) == rule->cycle_base
@@ -26,5 +32,4 @@ bool injector_is_enabled(void);
 
 
 #endif // FLEXRAY_FORWARDER_WITH_INJECTOR_H
-
 
